@@ -1,0 +1,52 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Hello IndexController!{% endblock %}
+
+{% block body %}
+<style>
+    .example-wrapper { margin: 1em auto; max-width: 800px; width: 95%; font: 18px/1.5 sans-serif; }
+    .example-wrapper code { background: #F5F5F5; padding: 2px 6px; }
+</style>
+
+<div class="example-wrapper">
+
+        <div id="calendar-holder"></div>
+
+    {% block javascripts %}
+        <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js"></script>
+
+        <script>
+            document.addEventListener('DOMContentLoaded', () => {
+                const calendarEl = document.getElementById('calendar-holder');
+
+                const calendar = new FullCalendar.Calendar(calendarEl, {
+                    defaultView: 'dayGridMonth',
+                    editable: true,
+                    eventSources: [
+                        {
+                            url: '/fc-load-events',
+                            method: 'POST',
+                            extraParams: {
+                                filters: JSON.stringify({})
+                            },
+                            failure: () => {
+                                // alert('There was an error while fetching FullCalendar!');
+                            },
+                        },
+                    ],
+                    headerToolbar: {
+                        start: 'prev,next today',
+                        center: 'title',
+                        end: 'dayGridMonth,timeGridWeek,timeGridDay'
+                    },
+                    timeZone: 'UTC',
+                });
+
+                calendar.render();
+            });
+        </script>
+
+    {% endblock %}
+
+</div>
+{% endblock %}
