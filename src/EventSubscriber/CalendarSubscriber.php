@@ -24,16 +24,16 @@ class CalendarSubscriber implements EventSubscriberInterface
 
         // You may want to make a custom query from your database to fill the calendar
 
-        $setDataEvent->addEvent(new Event(
-            'Event 1',
-            new \DateTime('Tuesday this week'),
-            new \DateTime('Wednesdays this week')
-        ));
+//        $setDataEvent->addEvent(new Event(
+//            'Event 1',
+//            new \DateTime('5am today'),
+//            new \DateTime('9am today')
+//        ));
 
-        // If the end date is null or not defined, it creates a all day event
-        $setDataEvent->addEvent(new Event(
-            'All day',
-            new \DateTime('Friday this week')
-        ));
+//        // If the end date is null or not defined, it creates a all day event
+//        $setDataEvent->addEvent(new Event(
+//            'All day',
+//            new \DateTime('Friday this week')
+//        ));
     }
 }

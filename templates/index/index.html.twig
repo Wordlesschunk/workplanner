@@ -20,8 +20,16 @@
                 const calendarEl = document.getElementById('calendar-holder');
 
                 const calendar = new FullCalendar.Calendar(calendarEl, {
-                    defaultView: 'dayGridMonth',
+                    defaultView: 'timeGridWeek',
+                    initialView: 'timeGridWeek',
+                    headerToolbar: {
+                        start: 'prev,next today',
+                        center: 'title',
+                        end: 'timeGridWeek'
+                    },
+
                     editable: true,
+
                     eventSources: [
                         {
                             url: '/fc-load-events',
@@ -34,12 +42,29 @@
                             },
                         },
                     ],
-                    headerToolbar: {
-                        start: 'prev,next today',
-                        center: 'title',
-                        end: 'dayGridMonth,timeGridWeek,timeGridDay'
+
+                    // allow selecting
+                    selectable: true,
+                    selectMirror: true, // shows a temp highlight while selecting
+                    unselectAuto: true,
+                    allDaySlot: false,
+
+                    // what happens when a range is selected
+                    select(info) {
+                        console.log('Selected from', info.startStr, 'to', info.endStr);
+                        // Example: add a temporary event
+                        // calendar.addEvent({
+                        //   title: 'New event',
+                        //   start: info.start,
+                        //   end: info.end,
+                        //   allDay: info.allDay
+                        // });
                     },
+
                     timeZone: 'UTC',
+
+
+
                 });
 
                 calendar.render();
