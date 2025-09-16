@@ -16,7 +16,7 @@ class CalendarEvent
     #[ORM\Column]
     private int $id;
 
-    #[ORM\Column(length: 255)]
+    #[ORM\Column]
     private string $title;
 
     #[ORM\Column]
@@ -24,6 +24,9 @@ class CalendarEvent
 
     #[ORM\Column]
     private \DateTime $endTime;
+
+    #[ORM\Column]
+    private bool $locked = false; //If locked, it either came from an external calendar or user doesn't want the event to move
 
     /**
      * @param string $title
@@ -68,5 +71,17 @@ class CalendarEvent
     public function getEndTime(): \DateTime
     {
         return $this->endTime;
+    }
+
+    public function isLocked(): ?bool
+    {
+        return $this->locked;
+    }
+
+    public function setLocked(bool $locked): static
+    {
+        $this->locked = $locked;
+
+        return $this;
     }
 }
