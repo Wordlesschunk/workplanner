@@ -9,6 +9,8 @@ use App\Entity\CalendarEvent;
 use CalendarBundle\Entity\Event;
 use CalendarBundle\Event\SetDataEvent;
 use Doctrine\ORM\EntityManagerInterface;
+use Sabre\VObject\Reader;
+use Sabre\VObject\Recur\EventIterator;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 class CalendarSubscriber implements EventSubscriberInterface
 {
@@ -25,31 +27,65 @@ class CalendarSubscriber implements EventSubscriberInterface
 
     public function onCalendarSetData(SetDataEvent $setDataEvent): void
     {
-        $start = $setDataEvent->getStart();
-        $end = $setDataEvent->getEnd();
-        $filters = $setDataEvent->getFilters();
+        $calendarPath = __DIR__ . '/../calendar.ics';
 
-        $setDataEvent->addEvent(new Event(
-            'Event 1',
-            new \DateTime('today 5am'),
-            new \DateTime('today 9am')
-        ));
+        if (!file_exists($calendarPath)) {
+            return; // Optionally log missing file
+        }
 
-        $fcEvent = new Event(
-            'FooBar',
-            new \DateTime('today 11am'),
-            new \DateTime('today 1pm'),
-        );
+        $vcalendar = Reader::read(file_get_contents($calendarPath));
 
-        $fcEvent->addOption('rrule', [
-            'freq' => 'weekly',
-            'interval' => 1,
-            'byweekday' => ['MO', 'WE'],
-            'dtstart' => '2025-09-01T10:00:00Z',
-//            'until'   => $event->getEndTime()->modify('+2 months')->format('Y-m-d\TH:i:s'),
-        ]);
+        $startWindow = $setDataEvent->getStart();
+        $endWindow = $setDataEvent->getEnd();
 
-        $setDataEvent->addEvent($fcEvent);
+        foreach ($vcalendar->VEVENT as $vevent) {
+            // Handle recurring events
+            if (isset($vevent->RRULE)) {
+                $it = new EventIterator($vcalendar, $vevent->UID);
+                $it->fastForward($startWindow);
+
+                while ($it->valid() && $it->getDTStart() <= $endWindow) {
+                    $fcEvent = new Event(
+                        (string)$vevent->SUMMARY,
+                        \DateTime::createFromImmutable($it->getDTStart()),
+                        \DateTime::createFromImmutable($it->getDTEnd())
+                    );
+
+                    // Optional: add extra info
+                    if (isset($vevent->DESCRIPTION)) {
+                        $fcEvent->addOption('description', (string)$vevent->DESCRIPTION);
+                    }
+                    if (isset($vevent->LOCATION)) {
+                        $fcEvent->addOption('location', (string)$vevent->LOCATION);
+                    }
+
+                    $setDataEvent->addEvent($fcEvent);
+                    $it->next();
+                }
+            } else {
+                // Single (non-recurring) events
+                $start = $vevent->DTSTART->getDateTime();
+                $end = $vevent->DTEND->getDateTime();
+
+                // Only add events within the calendar view window
+                if ($start <= $endWindow && $end >= $startWindow) {
+                    $fcEvent = new Event(
+                        (string)$vevent->SUMMARY,
+                        \DateTime::createFromImmutable($start),
+                        \DateTime::createFromImmutable($end)
+                    );
+
+                    if (isset($vevent->DESCRIPTION)) {
+                        $fcEvent->addOption('description', (string)$vevent->DESCRIPTION);
+                    }
+                    if (isset($vevent->LOCATION)) {
+                        $fcEvent->addOption('location', (string)$vevent->LOCATION);
+                    }
+
+                    $setDataEvent->addEvent($fcEvent);
+                }
+            }
+        }
 
     }
 }
