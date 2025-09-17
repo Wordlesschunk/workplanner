@@ -16,6 +16,6 @@ final class DebugController extends AbstractController
     public function index(
     ): Response
     {
-        return $this->render('deub/index.html.twig');
+        return $this->render('debug/index.html.twig');
     }
 }

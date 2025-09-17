@@ -15,8 +15,9 @@ class CalendarSubscriber implements EventSubscriberInterface
     private const DURATION_FORMAT = '%H:%I'; // HH:MM
     private const DTSTART_FORMAT = 'Ymd\THis\Z';
 
-    public function __construct(private EntityManagerInterface $entityManager)
-    {
+    public function __construct(
+        private EntityManagerInterface $entityManager
+    ){
     }
 
     public static function getSubscribedEvents(): array
@@ -28,29 +29,27 @@ class CalendarSubscriber implements EventSubscriberInterface
 
     public function onCalendarSetData(SetDataEvent $setDataEvent): void
     {
-        $recurringEvents = $this->entityManager
+        $icsCalendarEvents = $this->entityManager
             ->getRepository(CalendarEventICS::class)
-            ->findBy(['isRecurring' => true]);
+            ->findAll();
 
-        foreach ($recurringEvents as $recurringEvent) {
-            $event = $this->createCalendarEvent($recurringEvent);
+        foreach ($icsCalendarEvents as $icsEvent) {
+            $event = $this->createCalendarEvent($icsEvent, false);
 
-            $rrule = sprintf(
-                '%s;DTSTART=%s',
-                $recurringEvent->getRecurringData(),
-                $recurringEvent->getStart()->format(self::DTSTART_FORMAT)
-            );
+            if ($icsEvent->isRecurring()) {
+                $rrule = sprintf(
+                    '%s;DTSTART=%s',
+                    $icsEvent->getRecurringData(),
+                    $icsEvent->getStart()->format(self::DTSTART_FORMAT)
+                );
 
-            $event->addOption('rrule', $rrule);
-            $setDataEvent->addEvent($event);
-        }
+                $event->addOption('rrule', $rrule);
 
-        $standardEvents = $this->entityManager
-            ->getRepository(CalendarEventICS::class)
-            ->findBy(['isRecurring' => false]);
+                $setDataEvent->addEvent($event);
+            }
 
-        foreach ($standardEvents as $standardEvent) {
-            $event = $this->createCalendarEvent($standardEvent);
+            $event = $this->createCalendarEvent($icsEvent, false);
+
             $setDataEvent->addEvent($event);
         }
     }
@@ -60,13 +59,14 @@ class CalendarSubscriber implements EventSubscriberInterface
         return $start->diff($end)->format(self::DURATION_FORMAT);
     }
 
-    private function createCalendarEvent(CalendarEventICS $source): Event
+    private function createCalendarEvent(CalendarEventICS $source, bool $editableEvent): Event
     {
         $start = $source->getStart();
         $end = $source->getEnd();
 
         $event = new Event($source->getSummary(), $start, $end);
         $event->addOption('duration', $this->computeDuration($start, $end));
+        $event->addOption('editable', $editableEvent);
 
         return $event;
     }
