@@ -4,12 +4,23 @@ declare(strict_types=1);
 
 namespace App\EventSubscriber;
 
+use App\Entity\CalendarEventICS;
 use CalendarBundle\Entity\Event;
 use CalendarBundle\Event\SetDataEvent;
+use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+
 class CalendarSubscriber implements EventSubscriberInterface
 {
-    public static function getSubscribedEvents()
+    private const DURATION_FORMAT = '%H:%I'; // HH:MM
+    private const DTSTART_FORMAT = 'Ymd\THis\Z';
+
+    public function __construct(
+        private EntityManagerInterface $entityManager
+    ){
+    }
+
+    public static function getSubscribedEvents(): array
     {
         return [
             SetDataEvent::class => 'onCalendarSetData',
@@ -18,22 +29,45 @@ class CalendarSubscriber implements EventSubscriberInterface
 
     public function onCalendarSetData(SetDataEvent $setDataEvent): void
     {
-        $start = $setDataEvent->getStart();
-        $end = $setDataEvent->getEnd();
-        $filters = $setDataEvent->getFilters();
+        $icsCalendarEvents = $this->entityManager
+            ->getRepository(CalendarEventICS::class)
+            ->findAll();
 
-        // You may want to make a custom query from your database to fill the calendar
+        foreach ($icsCalendarEvents as $icsEvent) {
+            $event = $this->createCalendarEvent($icsEvent, false);
 
-//        $setDataEvent->addEvent(new Event(
-//            'Event 1',
-//            new \DateTime('5am today'),
-//            new \DateTime('9am today')
-//        ));
+            if ($icsEvent->isRecurring()) {
+                $rrule = sprintf(
+                    '%s;DTSTART=%s',
+                    $icsEvent->getRecurringData(),
+                    $icsEvent->getStart()->format(self::DTSTART_FORMAT)
+                );
 
-//        // If the end date is null or not defined, it creates a all day event
-//        $setDataEvent->addEvent(new Event(
-//            'All day',
-//            new \DateTime('Friday this week')
-//        ));
+                $event->addOption('rrule', $rrule);
+
+                $setDataEvent->addEvent($event);
+            }
+
+            $event = $this->createCalendarEvent($icsEvent, false);
+
+            $setDataEvent->addEvent($event);
+        }
+    }
+
+    private function computeDuration(\DateTimeInterface $start, \DateTimeInterface $end): string
+    {
+        return $start->diff($end)->format(self::DURATION_FORMAT);
+    }
+
+    private function createCalendarEvent(CalendarEventICS $source, bool $editableEvent): Event
+    {
+        $start = $source->getStart();
+        $end = $source->getEnd();
+
+        $event = new Event($source->getSummary(), $start, $end);
+        $event->addOption('duration', $this->computeDuration($start, $end));
+        $event->addOption('editable', $editableEvent);
+
+        return $event;
     }
 }
