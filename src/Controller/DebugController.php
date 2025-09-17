@@ -14,6 +14,17 @@ final class DebugController extends AbstractController
     public function index(
     ): Response
     {
+
+//        $foo = 'FREQ=WEEKLY;UNTIL=20241118T140000Z;INTERVAL=1;BYDAY=MO;WKST=MO';
+//        $foo = 'FREQ=WEEKLY;UNTIL=20260916T110000Z;INTERVAL=1;BYDAY=MO,TU,WE,TH,FR;WKST=SU';
+//        $parts = array_reduce(explode(';', $foo), function ($carry, $item) {
+//            list($key, $value) = explode('=', $item);
+//            $carry[strtolower($key)] = $value;
+//            return $carry;
+//        }, []);
+//
+//        dump($parts);
+
         $calendarPath = __DIR__ . '/../calendar.ics';
 
         if (!file_exists($calendarPath)) {
@@ -27,9 +38,17 @@ final class DebugController extends AbstractController
         $endWindow = new \DateTimeImmutable('+3 weeks');
 
         foreach ($vcalendar->VEVENT as $vevent) {
+
+
+
             $start = $vevent->DTSTART->getDateTime();
 
             if (isset($vevent->RRULE)) {
+
+                dump($vevent);
+
+                dd($vevent->RRULE->getValue());
+
                 // Recurring event
                 $it = new EventIterator($vcalendar, $vevent->UID);
 
