@@ -4,121 +4,108 @@ namespace App\Entity;
 
 use App\Repository\CalendarEventICSRepository;
 use Doctrine\ORM\Mapping as ORM;
-
+#[ORM\Table(name: 'tblCalendarEventICS')]
 #[ORM\Entity(repositoryClass: CalendarEventICSRepository::class)]
 class CalendarEventICS
 {
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column]
-    private ?int $id = null;
+    private int $id;
 
     #[ORM\Column(length: 255)]
-    private ?string $uid = null;
+    private string $uid;
 
     #[ORM\Column(length: 255)]
-    private ?string $summary = null;
+    private string $summary;
 
     #[ORM\Column(length: 2550)]
-    private ?string $description = null;
+    private string $description;
 
     #[ORM\Column]
-    private ?\DateTime $start = null;
+    private \DateTime $start;
 
     #[ORM\Column]
-    private ?\DateTime $end = null;
+    private \DateTime $end;
 
     #[ORM\Column]
-    private ?bool $isRecurring = null;
+    private bool $isRecurring = false;
 
     #[ORM\Column(length: 255)]
-    private ?string $recurringData = null;
+    private string $recurringData;
 
-    public function getId(): ?int
+    public function getId(): int
     {
         return $this->id;
     }
 
-    public function getUid(): ?string
+    public function getUid(): string
     {
         return $this->uid;
     }
 
-    public function setUid(string $uid): static
+    public function setUid(string $uid): void
     {
         $this->uid = $uid;
-
-        return $this;
     }
 
-    public function getSummary(): ?string
+    public function getSummary(): string
     {
         return $this->summary;
     }
 
-    public function setSummary(string $summary): static
+    public function setSummary(string $summary): void
     {
         $this->summary = $summary;
-
-        return $this;
     }
 
-    public function getDescription(): ?string
+    public function getDescription(): string
     {
         return $this->description;
     }
 
-    public function setDescription(string $description): static
+    public function setDescription(string $description): void
     {
         $this->description = $description;
-
-        return $this;
     }
 
-    public function getStart(): ?\DateTime
+    public function getStart(): \DateTime
     {
         return $this->start;
     }
 
-    public function setStart(\DateTime $start): static
+    public function setStart(\DateTime $start): void
     {
         $this->start = $start;
-
-        return $this;
     }
 
-    public function getEnd(): ?\DateTime
+    public function getEnd(): \DateTime
     {
         return $this->end;
     }
 
-    public function setEnd(\DateTime $end): static
+    public function setEnd(\DateTime $end): void
     {
         $this->end = $end;
-
-        return $this;
     }
 
-    public function isRecurring(): ?bool
+    public function isRecurring(): bool
     {
         return $this->isRecurring;
     }
 
-    public function setIsRecurring(bool $isRecurring): static
+    public function setIsRecurring(bool $isRecurring): void
     {
         $this->isRecurring = $isRecurring;
-
-        return $this;
     }
 
-    public function getRecurringData(): ?string
+    public function getRecurringData(): string
     {
         return $this->recurringData;
     }
 
-    public function setRecurringData(?string $recurringData): void
+    public function setRecurringData(string $recurringData): void
     {
         $this->recurringData = $recurringData;
     }
-
 }

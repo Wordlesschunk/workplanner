@@ -4,22 +4,22 @@ declare(strict_types=1);
 
 namespace App\EventSubscriber;
 
-use App\Engine\SchedulerService;
-use App\Entity\CalendarEvent;
 use App\Entity\CalendarEventICS;
 use CalendarBundle\Entity\Event;
 use CalendarBundle\Event\SetDataEvent;
 use Doctrine\ORM\EntityManagerInterface;
-use Sabre\VObject\Reader;
-use Sabre\VObject\Recur\EventIterator;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+
 class CalendarSubscriber implements EventSubscriberInterface
 {
+    private const DURATION_FORMAT = '%H:%I'; // HH:MM
+    private const DTSTART_FORMAT = 'Ymd\THis\Z';
+
     public function __construct(private EntityManagerInterface $entityManager)
     {
     }
 
-    public static function getSubscribedEvents()
+    public static function getSubscribedEvents(): array
     {
         return [
             SetDataEvent::class => 'onCalendarSetData',
@@ -28,35 +28,46 @@ class CalendarSubscriber implements EventSubscriberInterface
 
     public function onCalendarSetData(SetDataEvent $setDataEvent): void
     {
-        $start = $setDataEvent->getStart();
-        $end = $setDataEvent->getEnd();
-        $filters = $setDataEvent->getFilters();
+        $recurringEvents = $this->entityManager
+            ->getRepository(CalendarEventICS::class)
+            ->findBy(['isRecurring' => true]);
 
-        $recurringICSCalendarEvents = $this->entityManager->getRepository(CalendarEventICS::class)->findBy(['isRecurring' => 1]);
-        /** @var CalendarEventICS $recurringEvent */
-        foreach ($recurringICSCalendarEvents as $recurringEvent) {
+        foreach ($recurringEvents as $recurringEvent) {
+            $event = $this->createCalendarEvent($recurringEvent);
 
-            $start = $recurringEvent->getStart();
-            $end = $recurringEvent->getEnd();
-            $diff = $start->diff($end);
-            $formattedDiff = $diff->format('%H:%I'); // HH:MM
-
-            $icsEvent = new Event($recurringEvent->getSummary(), $start, $end);
-
-            $rrule = sprintf('%s;DTSTART=%s',
+            $rrule = sprintf(
+                '%s;DTSTART=%s',
                 $recurringEvent->getRecurringData(),
-                $start->format('Ymd\THis\Z')
+                $recurringEvent->getStart()->format(self::DTSTART_FORMAT)
             );
 
-            $icsEvent->addOption('rrule', $rrule);
-            $icsEvent->addOption('duration', $formattedDiff);
-
-            $setDataEvent->addEvent($icsEvent);
+            $event->addOption('rrule', $rrule);
+            $setDataEvent->addEvent($event);
         }
 
+        $standardEvents = $this->entityManager
+            ->getRepository(CalendarEventICS::class)
+            ->findBy(['isRecurring' => false]);
 
-        $standardICSCalendarEvents = $this->entityManager->getRepository(CalendarEventICS::class)->findBy(['isRecurring' => 0]);
-        // todo do logic here
+        foreach ($standardEvents as $standardEvent) {
+            $event = $this->createCalendarEvent($standardEvent);
+            $setDataEvent->addEvent($event);
+        }
+    }
 
+    private function computeDuration(\DateTimeInterface $start, \DateTimeInterface $end): string
+    {
+        return $start->diff($end)->format(self::DURATION_FORMAT);
+    }
+
+    private function createCalendarEvent(CalendarEventICS $source): Event
+    {
+        $start = $source->getStart();
+        $end = $source->getEnd();
+
+        $event = new Event($source->getSummary(), $start, $end);
+        $event->addOption('duration', $this->computeDuration($start, $end));
+
+        return $event;
     }
 }

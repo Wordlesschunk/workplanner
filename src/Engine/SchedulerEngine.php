@@ -13,7 +13,7 @@ use App\Entity\CalendarEvent;
  * - Supports optional break time (in minutes) between tasks
  * - Spans multiple days as needed
  */
-final class SchedulerService
+final class SchedulerEngine
 {
     /** @var int Break between tasks in minutes */
     private int $breakMinutes = 0;
