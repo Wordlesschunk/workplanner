@@ -73,7 +73,6 @@ class AppCaliCommand extends Command
             // Fill/update fields...
             $event->setSummary((string) $vevent->SUMMARY);
             $event->setDescription('NULL');
-            $event->setDtStart(\DateTime::createFromImmutable($vevent->DTSTART->getDateTime()));
             $event->setStart(\DateTime::createFromImmutable($vevent->DTSTART->getDateTime()));
             $event->setEnd(\DateTime::createFromImmutable($vevent->DTEND->getDateTime()));
 
