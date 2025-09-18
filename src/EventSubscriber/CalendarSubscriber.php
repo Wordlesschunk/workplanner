@@ -36,17 +36,17 @@ class CalendarSubscriber implements EventSubscriberInterface
         foreach ($icsCalendarEvents as $icsEvent) {
             $event = $this->createCalendarEvent($icsEvent, false);
 
-            if ($icsEvent->isRecurring()) {
-                $rrule = sprintf(
-                    '%s;DTSTART=%s',
-                    $icsEvent->getRecurringData(),
-                    $icsEvent->getStart()->format(self::DTSTART_FORMAT)
-                );
-
-                $event->addOption('rrule', $rrule);
-
-                $setDataEvent->addEvent($event);
-            }
+//            if ($icsEvent->isRecurring()) {
+//                $rrule = sprintf(
+//                    '%s;DTSTART=%s',
+//                    $icsEvent->getRecurringData(),
+//                    $icsEvent->getStart()->format(self::DTSTART_FORMAT)
+//                );
+//
+//                $event->addOption('rrule', $rrule);
+//
+//                $setDataEvent->addEvent($event);
+//            }
 
             $event = $this->createCalendarEvent($icsEvent, false);
 
