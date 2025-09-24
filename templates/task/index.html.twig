@@ -1,0 +1,51 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Task index{% endblock %}
+
+{% block body %}
+    <h1>Task index</h1>
+
+    <table class="table">
+        <thead>
+        <tr>
+            <th>Id</th>
+            <th>Name</th>
+            <th>Notes</th>
+            <th>Priority</th>
+            <th>Duration Seconds</th>
+            <th>Duration Complete</th>
+            <th>Min Duration</th>
+            <th>Max Duration</th>
+            <th>Schedule After</th>
+            <th>Due Date</th>
+            <th>actions</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for task in tasks %}
+            <tr>
+                <td>{{ task.id }}</td>
+                <td>{{ task.name }}</td>
+                <td>{{ task.notes }}</td>
+                <td>{{ task.priority }}</td>
+                <td>{{ task.requiredDurationSeconds }}</td>
+                <td>{{ task.completedDurationSeconds }}</td>
+                <td>{{ task.eventMinDuration }}</td>
+                <td>{{ task.eventMaxDuration }}</td>
+                <td>{{ task.scheduleAfter ? task.scheduleAfter|date('Y-m-d H:i:s') : '' }}</td>
+                <td>{{ task.dueDate ? task.dueDate|date('Y-m-d H:i:s') : '' }}</td>
+                <td>
+                    <a href="{{ path('app_task_show', {'id': task.id}) }}">show</a>
+                    <a href="{{ path('app_task_edit', {'id': task.id}) }}">edit</a>
+                </td>
+            </tr>
+        {% else %}
+            <tr>
+                <td colspan="11">no records found</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+
+    <a href="{{ path('app_task_new') }}">Create new</a>
+{% endblock %}

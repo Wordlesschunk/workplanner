@@ -11,6 +11,14 @@
         {% endblock %}
     </head>
     <body>
+
+        <div>
+            <a href="{{ path('app_index') }}">Calendar</a>
+        <br>
+            <a href="{{ path('app_task_index') }}">Tasks</a>
+        </div>
+        <hr>
+
         {% block body %}{% endblock %}
     </body>
 </html>
