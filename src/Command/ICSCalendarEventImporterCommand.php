@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Command;
 
-use App\Entity\CalendarEventICS;
+use App\Entity\ICSCalendarEvent;
 use Doctrine\ORM\EntityManagerInterface;
 use Sabre\VObject\Reader;
 use Sabre\VObject\Recur\EventIterator;
@@ -17,10 +17,10 @@ use Symfony\Component\HttpFoundation\Response;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 #[AsCommand(
-    name: 'app:calendar-ics:import:two',
+    name: 'app:ics-calendar:import',
     description: 'Imports calendar events from an ICS file (expanded with recurrences)',
 )]
-class AppICSCalendarEventImporterTwoCommand extends Command
+class ICSCalendarEventImporterCommand extends Command
 {
     public function __construct(
         private readonly HttpClientInterface $client,
@@ -43,14 +43,14 @@ class AppICSCalendarEventImporterTwoCommand extends Command
         $url = 'https://outlook.office365.com/owa/calendar/bfb19676106c49ff90acb1e1199a0397@wrenkitchens.com/00e8168b044a42f9ad6e8506a7a1895f7738480038597650141/calendar.ics';
         $response = $this->client->request('GET', $url);
 
-        if ($response->getStatusCode() !== Response::HTTP_OK) {
+        if (Response::HTTP_OK !== $response->getStatusCode()) {
             throw new \RuntimeException('Unable to fetch ICS feed.');
         }
 
         $vcalendar = Reader::read($response->getContent());
 
         // Load existing events, indexed by uid
-        $existing = $this->em->getRepository(CalendarEventICS::class)
+        $existing = $this->em->getRepository(ICSCalendarEvent::class)
             ->createQueryBuilder('e')
             ->indexBy('e', 'e.uid')
             ->getQuery()
@@ -64,7 +64,7 @@ class AppICSCalendarEventImporterTwoCommand extends Command
                 continue; // we only expand masters
             }
 
-            $iterator = new EventIterator($vcalendar, (string)$vevent->UID);
+            $iterator = new EventIterator($vcalendar, (string) $vevent->UID);
 
             // Expand up to 1 year in the future
             $until = new \DateTime('+1 year');
@@ -73,29 +73,29 @@ class AppICSCalendarEventImporterTwoCommand extends Command
                 $occurrence = $iterator->getEventObject();
 
                 // Skip cancelled occurrences
-                if ((string)($occurrence->STATUS ?? '') === 'CANCELLED') {
+                if ('CANCELLED' === (string) ($occurrence->STATUS ?? '')) {
                     $iterator->next();
                     continue;
                 }
 
                 // UID + recurrence timestamp = unique key
                 $recurrenceId = $iterator->getDTStart()->format('Y-m-d H:i:s');
-                $seenKey = (string)$vevent->UID . '#' . $recurrenceId;
+                $seenKey = (string) $vevent->UID.'#'.$recurrenceId;
                 $seenUids[] = $seenKey;
 
-                $event = $existing[$seenKey] ?? new CalendarEventICS();
+                $event = $existing[$seenKey] ?? new ICSCalendarEvent();
                 if (!isset($existing[$seenKey])) {
                     $event->setUid($seenKey);
                     $this->em->persist($event);
                 }
 
                 // Update fields from occurrence
-                $event->setSummary((string)($occurrence->SUMMARY ?? ''));
-                $event->setDescription((string)($occurrence->DESCRIPTION ?? ''));
+                $event->setSummary((string) ($occurrence->SUMMARY ?? ''));
+                $event->setDescription((string) ($occurrence->DESCRIPTION ?? ''));
                 $event->setStart(\DateTime::createFromImmutable($iterator->getDTStart()));
                 $event->setEnd(\DateTime::createFromImmutable($iterator->getDTEnd()));
                 $event->setIsRecurring(true);
-                $event->setRecurringData((string)($vevent->RRULE ?? ''));
+                $event->setRecurringData((string) ($vevent->RRULE ?? ''));
 
                 $iterator->next();
             }

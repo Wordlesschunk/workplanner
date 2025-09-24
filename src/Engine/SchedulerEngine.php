@@ -11,7 +11,7 @@ use App\Entity\CalendarEvent;
  * - Respects existing calendar events (no overlaps / double booking)
  * - Schedules only within working hours (09:00–17:00)
  * - Supports optional break time (in minutes) between tasks
- * - Spans multiple days as needed
+ * - Spans multiple days as needed.
  */
 final class SchedulerEngine
 {
@@ -31,12 +31,13 @@ final class SchedulerEngine
     public function setCalendarEvents(array $events): void
     {
         // Filter only CalendarEvent instances
-        $this->calendarEvents = array_values(array_filter($events, fn($e) => $e instanceof CalendarEvent));
+        $this->calendarEvents = array_values(array_filter($events, fn ($e) => $e instanceof CalendarEvent));
     }
 
     /**
-     * @param array<int,array{title:string,duration:int}> $tasks Each task has title and duration (seconds)
-     * @param \DateTimeInterface|null $startFrom Optional start date/time reference (defaults to now)
+     * @param array<int,array{title:string,duration:int}> $tasks     Each task has title and duration (seconds)
+     * @param \DateTimeInterface|null                     $startFrom Optional start date/time reference (defaults to now)
+     *
      * @return CalendarEvent[] Scheduled calendar event entities (not persisted)
      */
     public function scheduleTasks(array $tasks, ?\DateTimeInterface $startFrom = null): array
@@ -50,8 +51,8 @@ final class SchedulerEngine
         $busyByDay = $this->buildBusyMap($this->calendarEvents);
 
         foreach ($tasks as $index => $task) {
-            $title = $task['title'] ?? ('Task '.($index+1));
-            $remaining = (int)($task['duration'] ?? 0);
+            $title = $task['title'] ?? ('Task '.($index + 1));
+            $remaining = (int) ($task['duration'] ?? 0);
             if ($remaining <= 0) {
                 continue; // skip invalid durations
             }
@@ -142,6 +143,7 @@ final class SchedulerEngine
         if ($dt >= $dayEnd) {
             return $this->nextWorkDayStart($dt);
         }
+
         return $dt;
     }
 
@@ -155,6 +157,7 @@ final class SchedulerEngine
         if ($dt >= $dayEnd) {
             return $this->nextWorkDayStart($dt);
         }
+
         return $dt;
     }
 
@@ -162,12 +165,15 @@ final class SchedulerEngine
     {
         // Simple next day 09:00; does not skip weekends for simplicity (requirement didn't specify)
         $next = $dt->modify('+1 day');
+
         return $next->setTime(9, 0, 0);
     }
 
     /**
      * Build a map of busy intervals by YYYY-MM-DD, merged and clipped to work window.
+     *
      * @param CalendarEvent[] $events
+     *
      * @return array<string,array{0:\DateTimeImmutable,1:\DateTimeImmutable}[]> Map day => list of [start,end]
      */
     private function buildBusyMap(array $events): array
@@ -176,7 +182,9 @@ final class SchedulerEngine
         foreach ($events as $ev) {
             $start = \DateTimeImmutable::createFromMutable($ev->getStartTime());
             $end = \DateTimeImmutable::createFromMutable($ev->getEndTime());
-            if ($end <= $start) continue;
+            if ($end <= $start) {
+                continue;
+            }
 
             // Iterate day-by-day and clip to 09:00–17:00 daily windows
             $day = $start->setTime(0, 0, 0);
@@ -196,16 +204,16 @@ final class SchedulerEngine
 
         // Merge overlapping intervals per day and sort
         foreach ($map as $key => $list) {
-            usort($list, fn($a, $b) => $a[0] <=> $b[0]);
+            usort($list, fn ($a, $b) => $a[0] <=> $b[0]);
             $merged = [];
             foreach ($list as [$s, $e]) {
                 if (empty($merged)) {
                     $merged[] = [$s, $e];
                 } else {
-                    [$ls, $le] = $merged[count($merged)-1];
+                    [$ls, $le] = $merged[count($merged) - 1];
                     if ($s <= $le) {
                         // overlap/adjacent
-                        $merged[count($merged)-1] = [$ls, ($le > $e ? $le : $e)];
+                        $merged[count($merged) - 1] = [$ls, $le > $e ? $le : $e];
                     } else {
                         $merged[] = [$s, $e];
                     }
@@ -219,7 +227,9 @@ final class SchedulerEngine
 
     /**
      * Compute free intervals for the given day containing $reference.
+     *
      * @param array{0:\DateTimeImmutable,1:\DateTimeImmutable}[] $busyIntervals
+     *
      * @return array{0:\DateTimeImmutable,1:\DateTimeImmutable}[]
      */
     private function computeFreeIntervalsForDay(\DateTimeImmutable $reference, array $busyIntervals): array
@@ -233,24 +243,28 @@ final class SchedulerEngine
             $adjusted = [];
             foreach ($busyIntervals as [$bs, $be]) {
                 // Expand and clip to day window
-                $as = $bs->modify('-' . $this->breakMinutes . ' minutes');
-                $ae = $be->modify('+' . $this->breakMinutes . ' minutes');
-                if ($as < $dayStart) { $as = $dayStart; }
-                if ($ae > $dayEnd) { $ae = $dayEnd; }
+                $as = $bs->modify('-'.$this->breakMinutes.' minutes');
+                $ae = $be->modify('+'.$this->breakMinutes.' minutes');
+                if ($as < $dayStart) {
+                    $as = $dayStart;
+                }
+                if ($ae > $dayEnd) {
+                    $ae = $dayEnd;
+                }
                 if ($ae > $as) {
                     $adjusted[] = [$as, $ae];
                 }
             }
             // Merge adjusted intervals
-            usort($adjusted, fn($a, $b) => $a[0] <=> $b[0]);
+            usort($adjusted, fn ($a, $b) => $a[0] <=> $b[0]);
             $merged = [];
             foreach ($adjusted as [$s, $e]) {
                 if (empty($merged)) {
                     $merged[] = [$s, $e];
                 } else {
-                    [$ls, $le] = $merged[count($merged)-1];
+                    [$ls, $le] = $merged[count($merged) - 1];
                     if ($s <= $le) {
-                        $merged[count($merged)-1] = [$ls, ($le > $e ? $le : $e)];
+                        $merged[count($merged) - 1] = [$ls, $le > $e ? $le : $e];
                     } else {
                         $merged[] = [$s, $e];
                     }
@@ -266,7 +280,9 @@ final class SchedulerEngine
                 $free[] = [$cursor, $this->dtMin($bs, $dayEnd)];
             }
             $cursor = ($cursor > $be ? $cursor : $be);
-            if ($cursor >= $dayEnd) break;
+            if ($cursor >= $dayEnd) {
+                break;
+            }
         }
 
         if ($cursor < $dayEnd) {

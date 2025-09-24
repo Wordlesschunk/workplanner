@@ -2,11 +2,12 @@
 
 namespace App\Entity;
 
-use App\Repository\CalendarEventICSRepository;
+use App\Repository\ICSCalendarEventRepository;
 use Doctrine\ORM\Mapping as ORM;
+
 #[ORM\Table(name: 'tblCalendarEventICS')]
-#[ORM\Entity(repositoryClass: CalendarEventICSRepository::class)]
-class CalendarEventICS
+#[ORM\Entity(repositoryClass: ICSCalendarEventRepository::class)]
+class ICSCalendarEvent
 {
     #[ORM\Id]
     #[ORM\GeneratedValue]

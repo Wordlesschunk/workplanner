@@ -26,19 +26,13 @@ class CalendarEvent
     private \DateTime $endTime;
 
     #[ORM\Column]
-    private bool $locked = false; //If locked, it either came from an external calendar or user doesn't want the event to move
+    private bool $locked = false; // If locked, it either came from an external calendar or user doesn't want the event to move
 
-    /**
-     * @param string $title
-     * @param \DateTime $startTime
-     * @param \DateTime $endTime
-     */
     private function __construct(
         string $title,
         \DateTime $startTime,
-        \DateTime $endTime
-    )
-    {
+        \DateTime $endTime,
+    ) {
         $this->title = $title;
         $this->startTime = $startTime;
         $this->endTime = $endTime;
@@ -47,9 +41,8 @@ class CalendarEvent
     public static function create(
         string $title,
         \DateTime $startTime,
-        \DateTime $endTime
-    ): self
-    {
+        \DateTime $endTime,
+    ): self {
         return new self($title, $startTime, $endTime);
     }
 

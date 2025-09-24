@@ -23,7 +23,7 @@ class Task
     private string $priority = 'LOW';
 
     #[ORM\Column]
-    private int $duration = 0; //in seconds
+    private int $duration = 0; // in seconds
 
     #[ORM\Column(length: 255, nullable: true)]
     private string $notes;
@@ -72,5 +72,4 @@ class Task
     {
         $this->notes = $notes;
     }
-
 }

@@ -13,13 +13,10 @@
     <div id="calendar-holder"></div>
 
     {% block javascripts %}
-
         <!-- rrule lib -->
         <script src='https://cdn.jsdelivr.net/npm/rrule@2.6.4/dist/es5/rrule.min.js'></script>
-
         <!-- fullcalendar bundle -->
         <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.19/index.global.min.js'></script>
-
         <!-- the rrule-to-fullcalendar connector. must go AFTER the rrule lib -->
         <script src='https://cdn.jsdelivr.net/npm/@fullcalendar/rrule@6.1.19/index.global.min.js'></script>
 
@@ -62,68 +59,6 @@
                 calendar.render();
             });
         </script>
-
-
-
-
-{#        <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js"></script>#}
-
-{#        <script>#}
-{#            document.addEventListener('DOMContentLoaded', () => {#}
-{#                const calendarEl = document.getElementById('calendar-holder');#}
-
-{#                const calendar = new FullCalendar.Calendar(calendarEl, {#}
-{#                    defaultView: 'timeGridWeek',#}
-{#                    initialView: 'timeGridWeek',#}
-{#                    headerToolbar: {#}
-{#                        start: 'prev,next today',#}
-{#                        center: 'title',#}
-{#                        end: 'timeGridWeek'#}
-{#                    },#}
-
-{#                    editable: true,#}
-
-{#                    eventSources: [#}
-{#                        {#}
-{#                            url: '/fc-load-events',#}
-{#                            method: 'POST',#}
-{#                            extraParams: {#}
-{#                                filters: JSON.stringify({})#}
-{#                            },#}
-{#                            failure: () => {#}
-{#                                // alert('There was an error while fetching FullCalendar!');#}
-{#                            },#}
-{#                        },#}
-{#                    ],#}
-
-{#                    // allow selecting#}
-{#                    selectable: true,#}
-{#                    selectMirror: true, // shows a temp highlight while selecting#}
-{#                    unselectAuto: true,#}
-{#                    allDaySlot: false,#}
-
-{#                    // what happens when a range is selected#}
-{#                    select(info) {#}
-{#                        console.log('Selected from', info.startStr, 'to', info.endStr);#}
-{#                        // Example: add a temporary event#}
-{#                        // calendar.addEvent({#}
-{#                        //   title: 'New event',#}
-{#                        //   start: info.start,#}
-{#                        //   end: info.end,#}
-{#                        //   allDay: info.allDay#}
-{#                        // });#}
-{#                    },#}
-
-{#                    timeZone: 'UTC',#}
-
-
-
-{#                });#}
-
-{#                calendar.render();#}
-{#            });#}
-{#        </script>#}
     {% endblock %}
-
 </div>
 {% endblock %}
