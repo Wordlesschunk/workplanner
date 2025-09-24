@@ -7,8 +7,7 @@
 /public/bundles/
 /var/
 /vendor/
-.idea
-.idea/*
+.idea/
 ###< symfony/framework-bundle ###
 
 ###> friendsofphp/php-cs-fixer ###
