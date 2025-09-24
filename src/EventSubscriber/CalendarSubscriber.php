@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\EventSubscriber;
 
-use App\Entity\CalendarEventICS;
+use App\Entity\ICSCalendarEvent;
 use CalendarBundle\Entity\Event;
 use CalendarBundle\Event\SetDataEvent;
 use Doctrine\ORM\EntityManagerInterface;
@@ -16,8 +16,8 @@ class CalendarSubscriber implements EventSubscriberInterface
     private const DTSTART_FORMAT = 'Ymd\THis\Z';
 
     public function __construct(
-        private EntityManagerInterface $entityManager
-    ){
+        private EntityManagerInterface $entityManager,
+    ) {
     }
 
     public static function getSubscribedEvents(): array
@@ -30,26 +30,11 @@ class CalendarSubscriber implements EventSubscriberInterface
     public function onCalendarSetData(SetDataEvent $setDataEvent): void
     {
         $icsCalendarEvents = $this->entityManager
-            ->getRepository(CalendarEventICS::class)
+            ->getRepository(ICSCalendarEvent::class)
             ->findAll();
 
         foreach ($icsCalendarEvents as $icsEvent) {
             $event = $this->createCalendarEvent($icsEvent, false);
-
-            if ($icsEvent->isRecurring()) {
-                $rrule = sprintf(
-                    '%s;DTSTART=%s',
-                    $icsEvent->getRecurringData(),
-                    $icsEvent->getStart()->format(self::DTSTART_FORMAT)
-                );
-
-                $event->addOption('rrule', $rrule);
-
-                $setDataEvent->addEvent($event);
-            }
-
-            $event = $this->createCalendarEvent($icsEvent, false);
-
             $setDataEvent->addEvent($event);
         }
     }
@@ -59,7 +44,7 @@ class CalendarSubscriber implements EventSubscriberInterface
         return $start->diff($end)->format(self::DURATION_FORMAT);
     }
 
-    private function createCalendarEvent(CalendarEventICS $source, bool $editableEvent): Event
+    private function createCalendarEvent(ICSCalendarEvent $source, bool $editableEvent): Event
     {
         $start = $source->getStart();
         $end = $source->getEnd();
