@@ -17,4 +17,19 @@ class ICSCalendarEventRepository extends ServiceEntityRepository
     {
         parent::__construct($registry, ICSCalendarEvent::class);
     }
+
+    public function findAllICSEventsInDay(\DateTime $date): array
+    {
+        $startOfDay = clone $date;
+        $endOfDay = clone $date;
+
+        return $this->createQueryBuilder('e')
+            ->where('e.startDateTime >= :startTime')
+            ->andWhere('e.endDateTime <= :endTime')
+            ->setParameter('startTime', $startOfDay->setTime(0, 0, 0))
+            ->setParameter('endTime', $endOfDay->setTime(23, 59, 59))
+            ->orderBy('e.startDateTime', 'ASC')
+            ->getQuery()
+            ->getResult();
+    }
 }
