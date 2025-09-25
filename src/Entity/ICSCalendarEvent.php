@@ -27,10 +27,10 @@ class ICSCalendarEvent implements CalendarEventInterface
     private string $description;
 
     #[ORM\Column]
-    private \DateTime $startDateTime;
+    private \DateTimeImmutable $startDateTime;
 
     #[ORM\Column]
-    private \DateTime $endDateTime;
+    private \DateTimeImmutable $endDateTime;
 
     #[ORM\Column]
     private bool $locked = true;
@@ -70,22 +70,22 @@ class ICSCalendarEvent implements CalendarEventInterface
         $this->description = $description;
     }
 
-    public function getStartDateTime(): \DateTime
+    public function getStartDateTime(): \DateTimeImmutable
     {
         return $this->startDateTime;
     }
 
-    public function setStartDateTime(\DateTime $startDateTime): void
+    public function setStartDateTime(\DateTimeImmutable $startDateTime): void
     {
         $this->startDateTime = $startDateTime;
     }
 
-    public function getEndDateTime(): \DateTime
+    public function getEndDateTime(): \DateTimeImmutable
     {
         return $this->endDateTime;
     }
 
-    public function setEndDateTime(\DateTime $endDateTime): void
+    public function setEndDateTime(\DateTimeImmutable $endDateTime): void
     {
         $this->endDateTime = $endDateTime;
     }

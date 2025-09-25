@@ -18,7 +18,7 @@ class ICSCalendarEventRepository extends ServiceEntityRepository
         parent::__construct($registry, ICSCalendarEvent::class);
     }
 
-    public function findAllICSEventsInDay(\DateTime $date): array
+    public function findAllICSEventsInDay(\DateTimeImmutable $date): array
     {
         $startOfDay = clone $date;
         $endOfDay = clone $date;

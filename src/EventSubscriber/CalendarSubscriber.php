@@ -57,8 +57,8 @@ class CalendarSubscriber implements EventSubscriberInterface
 
     private function createCalendarEvent(CalendarEventInterface $source, bool $editableEvent): Event
     {
-        $start = $source->getStartDateTime();
-        $end = $source->getEndDateTime();
+        $start = \DateTime::createFromInterface($source->getStartDateTime());
+        $end = \DateTime::createFromInterface($source->getEndDateTime());
 
         $event = new Event($source->getTitle(), $start, $end);
         $event->addOption('duration', $this->computeDuration($start, $end));
