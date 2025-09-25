@@ -16,7 +16,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 
 #[AsCommand(
     name: 'app:schedule-tasks',
-    description: 'Schedules tasks into today’s free time with min/max chunking and a standard break between items.',
+    description: 'Schedules tasks into the remaining free time today with min/max chunking and a standard break.',
 )]
 class ScheduleTasksCommand extends Command
 {
@@ -44,24 +44,24 @@ class ScheduleTasksCommand extends Command
         // One unified break used everywhere (after meetings, between any two bookings, and between chunks)
         $BREAK_SECONDS = 900; // 15 minutes
 
-        // Default chunk policy (task can override min/max; break is global now)
+        // Default chunk policy (task can override min/max; break is global)
         $DEFAULT_MIN_CHUNK = 1800; // 30 min
         $DEFAULT_MAX_CHUNK = 3600; // 60 min
 
         // Today (Europe/London), immutable to avoid accidental mutation.
-        $today = new \DateTimeImmutable('tomorrow');
+        $today = new \DateTimeImmutable('today');
+        $now = new \DateTimeImmutable('now');
 
-        // ---------- SAMPLE TASKS ----------
+        // ---------- SAMPLE TASKS (replace with repo later) ----------
         $tasks = [
             [
                 'id' => 10,
                 'name' => 'Deep Work Block',
                 'priority' => 'high',
-                'required_duration_seconds' => 3 * 3600, // 5h total
+                'required_duration_seconds' => 3 * 3600, // 3h total
                 'completed_duration_seconds' => 0,
                 'min_chunk_seconds' => 1800,  // 30m
                 'max_chunk_seconds' => 3600,  // 60m
-                // no per-task break; we use global BREAK_SECONDS
             ],
             [
                 'id' => 11,
@@ -81,9 +81,10 @@ class ScheduleTasksCommand extends Command
             ],
         ];
 
-        // ---------- WORKDAY BOUNDS ----------
+        // ---------- WORKDAY WINDOW (clip to the remainder of today) ----------
         [$wsH, $wsM] = array_map('intval', explode(':', $WORK_START));
         [$weH, $weM] = array_map('intval', explode(':', $WORK_END));
+
         $workDayStart = $today->setTime($wsH, $wsM, 0);
         $workDayEnd = $today->setTime($weH, $weM, 0);
 
@@ -93,13 +94,20 @@ class ScheduleTasksCommand extends Command
             return Command::FAILURE;
         }
 
-        // Optional: if running midday, don’t schedule in the past within the same day.
-        $now = new \DateTimeImmutable('now');
+        // Window is from "now" (if within the day) to the workday end.
+        // If it's before work start, we start at work start. If it's after work end, nothing to schedule.
+        $windowStart = $workDayStart;
         if ($now > $workDayStart && $now < $workDayEnd) {
-            $workDayStart = $now;
+            $windowStart = $now;
+        } elseif ($now >= $workDayEnd) {
+            $io->warning('Workday has already ended. Nothing to schedule.');
+
+            return Command::SUCCESS;
         }
 
-        // ---------- BUSY CALENDAR BLOCKS (clip + merge) ----------
+        $windowEnd = $workDayEnd;
+
+        // ---------- BUSY CALENDAR BLOCKS (clip + merge within window) ----------
         /** @var ICSCalendarEvent[] $itemsInCalendar */
         $itemsInCalendar = $this->entityManager
             ->getRepository(ICSCalendarEvent::class)
@@ -110,32 +118,50 @@ class ScheduleTasksCommand extends Command
 
         $busy = [];
         foreach ($itemsInCalendar as $e) {
-            $s = $e->getStartDateTime();
-            $en = $e->getEndDateTime();
+            // Normalize to immutable
+            $s = \DateTimeImmutable::createFromInterface($e->getStartDateTime());
+            $en = \DateTimeImmutable::createFromInterface($e->getEndDateTime());
 
-            if ($en <= $workDayStart || $s >= $workDayEnd) {
-                continue; // outside workday
+            // Skip if the event is completely outside the window
+            if ($en <= $windowStart || $s >= $windowEnd) {
+                continue;
             }
 
-            $s = max($s, $workDayStart);
-            $en = min($en, $workDayEnd);
+            // Clamp event to the window [windowStart, windowEnd]
+            if ($s < $windowStart) {
+                $s = $windowStart;
+            }
+            if ($en > $windowEnd) {
+                $en = $windowEnd;
+            }
 
+            // Merge overlaps
             if (!empty($busy)) {
                 $lastKey = array_key_last($busy);
                 $last = $busy[$lastKey];
                 if ($s <= $last['end']) {
-                    $busy[$lastKey]['end'] = max($last['end'], $en);
+                    // extend the last block
+                    $busy[$lastKey]['end'] = ($en > $last['end']) ? $en : $last['end'];
                     continue;
                 }
             }
             $busy[] = ['start' => $s, 'end' => $en];
         }
 
-        // ---------- OPTIONAL: LUNCH HOLD (12:30–13:30) ----------
+        // ---------- OPTIONAL: LUNCH HOLD (12:30–13:30), also clamped to window ----------
         $lunchStart = $today->setTime(12, 30);
         $lunchEnd = $today->setTime(13, 30);
-        if ($lunchEnd > $workDayStart && $lunchStart < $workDayEnd) {
-            $busy[] = ['start' => max($lunchStart, $workDayStart), 'end' => min($lunchEnd, $workDayEnd)];
+
+        // Only add lunch if it intersects our scheduling window
+        if ($lunchEnd > $windowStart && $lunchStart < $windowEnd) {
+            // Clamp lunch to window
+            if ($lunchStart < $windowStart) {
+                $lunchStart = $windowStart;
+            }
+            if ($lunchEnd > $windowEnd) {
+                $lunchEnd = $windowEnd;
+            }
+            $busy[] = ['start' => $lunchStart, 'end' => $lunchEnd];
         }
 
         // Re-merge busy blocks after adding lunch
@@ -149,7 +175,7 @@ class ScheduleTasksCommand extends Command
                 }
                 $last = &$merged[array_key_last($merged)];
                 if ($blk['start'] <= $last['end']) {
-                    $last['end'] = max($last['end'], $blk['end']);
+                    $last['end'] = ($blk['end'] > $last['end']) ? $blk['end'] : $last['end'];
                 } else {
                     $merged[] = $blk;
                 }
@@ -157,12 +183,12 @@ class ScheduleTasksCommand extends Command
             $busy = $merged;
         }
 
-        // ---------- FREE SLOTS (apply the break AFTER each busy block) ----------
+        // ---------- FREE SLOTS (apply the unified break AFTER each busy block) ----------
         $freeTimeSlots = [];
-        $cursor = $workDayStart;
+        $cursor = $windowStart;
 
         foreach ($busy as $block) {
-            // Free time is from current cursor up to the next busy start (no pre-meeting break)
+            // Free time is from current cursor up to the next busy start
             if ($block['start'] > $cursor) {
                 $freeTimeSlots[] = [
                     'start' => $cursor,
@@ -173,23 +199,27 @@ class ScheduleTasksCommand extends Command
             // After a meeting ends, enforce the global break before anything else can start
             $afterMeeting = $block['end']->getTimestamp() + $BREAK_SECONDS;
             $cursor = (new \DateTimeImmutable('@'.$afterMeeting))->setTimezone($block['end']->getTimezone());
+            // If the break pushes us past the window end, we'll naturally skip adding more free time
+            if ($cursor >= $windowEnd) {
+                break;
+            }
         }
 
-        if ($cursor < $workDayEnd) {
+        if ($cursor < $windowEnd) {
             $freeTimeSlots[] = [
                 'start' => $cursor,
-                'end' => $workDayEnd,
-                'duration' => $workDayEnd->getTimestamp() - $cursor->getTimestamp(),
+                'end' => $windowEnd,
+                'duration' => $windowEnd->getTimestamp() - $cursor->getTimestamp(),
             ];
         }
 
         if (empty($freeTimeSlots)) {
-            $io->warning('No free time today within the defined workday.');
+            $io->warning('No remaining free time today within the defined work window.');
 
             return Command::SUCCESS;
         }
 
-        // ---------- SCHEDULE WITH CHUNKING (using the unified break) ----------
+        // ---------- SCHEDULE WITH CHUNKING (unified break) ----------
         $result = $this->scheduleTasksWithChunking(
             $tasks,
             $freeTimeSlots,
@@ -217,7 +247,7 @@ class ScheduleTasksCommand extends Command
 
         // ---------- CONSOLE SUMMARY ----------
         if (!empty($result['bookings'])) {
-            $io->section('Scheduled bookings');
+            $io->section('Scheduled bookings (remainder of today)');
             foreach ($result['bookings'] as $b) {
                 $io->writeln(sprintf(
                     '[slot #%d] %s (%s): %s → %s (%dm)',
@@ -292,7 +322,7 @@ class ScheduleTasksCommand extends Command
      *
      * - Finishes all chunks of task A before moving to task B.
      * - No padding; only the global $breakSec is enforced:
-     *     • after meetings (already handled when building free slots)
+     *     • after meetings (handled when building free slots)
      *     • between any two bookings inside a slot
      *     • between chunks of the same task
      * - Final leftover may be < min_chunk_seconds to avoid leaving an unschedulable tail.
@@ -334,8 +364,7 @@ class ScheduleTasksCommand extends Command
             $s = $slot['start'] instanceof \DateTimeInterface ? \DateTimeImmutable::createFromInterface($slot['start']) : new \DateTimeImmutable($slot['start']);
             $e = $slot['end']   instanceof \DateTimeInterface ? \DateTimeImmutable::createFromInterface($slot['end']) : new \DateTimeImmutable($slot['end']);
 
-            // No padding at edges now
-            $effectiveStartTs = $s->getTimestamp();
+            $effectiveStartTs = $s->getTimestamp(); // no edge padding
             $effectiveEndTs = $e->getTimestamp();
 
             if ($effectiveEndTs <= $effectiveStartTs) {
