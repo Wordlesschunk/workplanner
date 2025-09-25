@@ -16,7 +16,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 
 #[AsCommand(
     name: 'app:schedule-tasks',
-    description: 'Schedules tasks into today’s free time with per-task min/max chunking and breaks.',
+    description: 'Schedules tasks into today’s free time with min/max chunking and a standard break between items.',
 )]
 class ScheduleTasksCommand extends Command
 {
@@ -38,20 +38,20 @@ class ScheduleTasksCommand extends Command
         // ---------- HARD-CODED DEFAULTS ----------
         date_default_timezone_set('Europe/London');
 
-        $PADDING_SECONDS = 300;           // 5 min padding at slot edges & between ANY bookings
         $WORK_START = '08:00';
         $WORK_END = '17:00';
 
-        // Default chunk policy (task can override with its own min/max/break)
-        $DEFAULT_MIN_CHUNK = 1800;        // 30 min
-        $DEFAULT_MAX_CHUNK = 3600;        // 60 min
-        $DEFAULT_BREAK_BETWEEN_CHUNKS = 600; // 10 min break between chunks of the SAME task
+        // One unified break used everywhere (after meetings, between any two bookings, and between chunks)
+        $BREAK_SECONDS = 900; // 15 minutes
+
+        // Default chunk policy (task can override min/max; break is global now)
+        $DEFAULT_MIN_CHUNK = 1800; // 30 min
+        $DEFAULT_MAX_CHUNK = 3600; // 60 min
 
         // Today (Europe/London), immutable to avoid accidental mutation.
         $today = new \DateTimeImmutable('tomorrow');
 
         // ---------- SAMPLE TASKS ----------
-        // You can replace this with a repository call later.
         $tasks = [
             [
                 'id' => 10,
@@ -61,7 +61,7 @@ class ScheduleTasksCommand extends Command
                 'completed_duration_seconds' => 0,
                 'min_chunk_seconds' => 1800,  // 30m
                 'max_chunk_seconds' => 3600,  // 60m
-                'break_seconds' => 600,   // 10m between chunks
+                // no per-task break; we use global BREAK_SECONDS
             ],
             [
                 'id' => 11,
@@ -69,7 +69,6 @@ class ScheduleTasksCommand extends Command
                 'priority' => 'normal',
                 'required_duration_seconds' => 1800, // 30m
                 'completed_duration_seconds' => 0,
-                // inherits defaults (min=30m, max=60m, break=10m)
             ],
             [
                 'id' => 12,
@@ -79,7 +78,6 @@ class ScheduleTasksCommand extends Command
                 'completed_duration_seconds' => 0,
                 'min_chunk_seconds' => 1800, // 30m
                 'max_chunk_seconds' => 3600, // 60m
-                'break_seconds' => 300,  // 5m break if split (probably won’t split)
             ],
         ];
 
@@ -159,11 +157,12 @@ class ScheduleTasksCommand extends Command
             $busy = $merged;
         }
 
-        // ---------- FREE SLOTS ----------
+        // ---------- FREE SLOTS (apply the break AFTER each busy block) ----------
         $freeTimeSlots = [];
         $cursor = $workDayStart;
 
         foreach ($busy as $block) {
+            // Free time is from current cursor up to the next busy start (no pre-meeting break)
             if ($block['start'] > $cursor) {
                 $freeTimeSlots[] = [
                     'start' => $cursor,
@@ -171,7 +170,9 @@ class ScheduleTasksCommand extends Command
                     'duration' => $block['start']->getTimestamp() - $cursor->getTimestamp(),
                 ];
             }
-            $cursor = max($cursor, $block['end']);
+            // After a meeting ends, enforce the global break before anything else can start
+            $afterMeeting = $block['end']->getTimestamp() + $BREAK_SECONDS;
+            $cursor = (new \DateTimeImmutable('@'.$afterMeeting))->setTimezone($block['end']->getTimezone());
         }
 
         if ($cursor < $workDayEnd) {
@@ -188,14 +189,13 @@ class ScheduleTasksCommand extends Command
             return Command::SUCCESS;
         }
 
-        // ---------- SCHEDULE WITH CHUNKING ----------
+        // ---------- SCHEDULE WITH CHUNKING (using the unified break) ----------
         $result = $this->scheduleTasksWithChunking(
             $tasks,
             $freeTimeSlots,
-            $PADDING_SECONDS,
+            $BREAK_SECONDS,        // unified break between ANY bookings/chunks
             $DEFAULT_MIN_CHUNK,
-            $DEFAULT_MAX_CHUNK,
-            $DEFAULT_BREAK_BETWEEN_CHUNKS
+            $DEFAULT_MAX_CHUNK
         );
 
         // ---------- PERSIST BOOKINGS ----------
@@ -288,22 +288,25 @@ class ScheduleTasksCommand extends Command
     }
 
     /**
-     * Schedule multiple tasks with per-task chunking (min/max) and breaks between chunks.
+     * Schedule multiple tasks with per-task chunking (min/max) and a unified break between ANY two bookings.
      *
-     * - Schedules tasks one-by-one (finish all chunks of task A before task B).
-     * - Enforces padding at slot edges and between ANY two bookings.
-     * - Enforces task-level break between chunks of the SAME task.
+     * - Finishes all chunks of task A before moving to task B.
+     * - No padding; only the global $breakSec is enforced:
+     *     • after meetings (already handled when building free slots)
+     *     • between any two bookings inside a slot
+     *     • between chunks of the same task
      * - Final leftover may be < min_chunk_seconds to avoid leaving an unschedulable tail.
+     *
+     * @param int $breakSec global break in seconds between bookings/chunks
      *
      * @return array{bookings: array<int, array>, unscheduled: array<int, array>}
      */
     private function scheduleTasksWithChunking(
         array $tasks,
         array $timeslots,
-        int $paddingSec = 300,
-        int $defaultMinChunk = 1800,
-        int $defaultMaxChunk = 3600,
-        int $defaultBreakBetweenChunks = 600,
+        int $breakSec,
+        int $defaultMinChunk,
+        int $defaultMaxChunk,
     ): array {
         // 1) Filter: only tasks with remaining time
         $tasks = array_values(array_filter($tasks, fn ($t) => $this->remainingSeconds($t) > 0));
@@ -331,11 +334,12 @@ class ScheduleTasksCommand extends Command
             $s = $slot['start'] instanceof \DateTimeInterface ? \DateTimeImmutable::createFromInterface($slot['start']) : new \DateTimeImmutable($slot['start']);
             $e = $slot['end']   instanceof \DateTimeInterface ? \DateTimeImmutable::createFromInterface($slot['end']) : new \DateTimeImmutable($slot['end']);
 
-            $effectiveStartTs = $s->getTimestamp() + $paddingSec;
-            $effectiveEndTs = $e->getTimestamp() - $paddingSec;
+            // No padding at edges now
+            $effectiveStartTs = $s->getTimestamp();
+            $effectiveEndTs = $e->getTimestamp();
 
             if ($effectiveEndTs <= $effectiveStartTs) {
-                continue; // slot too small after padding
+                continue; // empty slot
             }
 
             $slots[] = [
@@ -350,7 +354,7 @@ class ScheduleTasksCommand extends Command
         $unscheduled = [];
 
         // Helper: try to place a single chunk of $seconds for $task not before $notBeforeTs
-        $placeChunk = function (array &$slots, array $task, int $seconds, int $notBeforeTs) use ($paddingSec): ?array {
+        $placeChunk = function (array &$slots, array $task, int $seconds, int $notBeforeTs) use ($breakSec): ?array {
             foreach ($slots as &$ws) {
                 $startTs = max($ws['cursor'], $notBeforeTs);
                 $available = $ws['endTs'] - $startTs;
@@ -363,8 +367,8 @@ class ScheduleTasksCommand extends Command
                 $start = (new \DateTimeImmutable('@'.$startTs))->setTimezone($tz);
                 $end = (new \DateTimeImmutable('@'.$endTs))->setTimezone($tz);
 
-                // Advance slot cursor (plus padding) after the booking
-                $ws['cursor'] = $endTs + $paddingSec;
+                // Advance slot cursor by global break after every booking
+                $ws['cursor'] = $endTs + $breakSec;
 
                 return [
                     'task_id' => (int) ($task['id'] ?? 0),
@@ -381,19 +385,18 @@ class ScheduleTasksCommand extends Command
             return null;
         };
 
-        // 4) Schedule each task fully (chunk-by-chunk) before moving to the next task
+        // 4) Schedule tasks fully (chunk-by-chunk) with the unified break
         foreach ($tasks as $t) {
             $remaining = $this->remainingSeconds($t);
             $minChunk = (int) ($t['min_chunk_seconds'] ?? $defaultMinChunk);
             $maxChunk = (int) ($t['max_chunk_seconds'] ?? $defaultMaxChunk);
-            $breakSec = (int) ($t['break_seconds'] ?? $defaultBreakBetweenChunks);
 
             // Guards
             $minChunk = max(1, $minChunk);
             $maxChunk = max($minChunk, $maxChunk);
 
             $chunksForThisTask = [];
-            $nextEarliestStartTs = 0; // no constraint for first chunk
+            $nextEarliestStartTs = 0; // first chunk has no special constraint beyond slot cursor
 
             while ($remaining > 0) {
                 // desired chunk up to maxChunk (but not more than remaining)
@@ -444,7 +447,7 @@ class ScheduleTasksCommand extends Command
                 $chunksForThisTask[] = $booking;
                 $remaining -= $booking['duration'];
 
-                // Enforce break before next chunk of the same task
+                // Enforce the same global break before the next chunk of the same task
                 if ($remaining > 0) {
                     $nextEarliestStartTs = $booking['end']->getTimestamp() + $breakSec;
                 }
