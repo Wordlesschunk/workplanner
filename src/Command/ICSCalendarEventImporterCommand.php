@@ -90,12 +90,10 @@ class ICSCalendarEventImporterCommand extends Command
                 }
 
                 // Update fields from occurrence
-                $event->setSummary((string) ($occurrence->SUMMARY ?? ''));
+                $event->setTitle((string) ($occurrence->SUMMARY ?? ''));
                 $event->setDescription((string) ($occurrence->DESCRIPTION ?? ''));
-                $event->setStart(\DateTime::createFromImmutable($iterator->getDTStart()));
-                $event->setEnd(\DateTime::createFromImmutable($iterator->getDTEnd()));
-                $event->setIsRecurring(true);
-                $event->setRecurringData((string) ($vevent->RRULE ?? ''));
+                $event->setStartDateTime(\DateTime::createFromImmutable($iterator->getDTStart()));
+                $event->setEndDateTime(\DateTime::createFromImmutable($iterator->getDTEnd()));
 
                 $iterator->next();
             }

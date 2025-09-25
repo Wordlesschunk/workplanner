@@ -1,13 +1,16 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Entity;
 
+use App\Interface\CalendarEventInterface;
 use App\Repository\ICSCalendarEventRepository;
 use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Table(name: 'tblCalendarEventICS')]
 #[ORM\Entity(repositoryClass: ICSCalendarEventRepository::class)]
-class ICSCalendarEvent
+class ICSCalendarEvent implements CalendarEventInterface
 {
     #[ORM\Id]
     #[ORM\GeneratedValue]
@@ -18,22 +21,19 @@ class ICSCalendarEvent
     private string $uid;
 
     #[ORM\Column(length: 255)]
-    private string $summary;
+    private string $title;
 
     #[ORM\Column(length: 2550)]
     private string $description;
 
     #[ORM\Column]
-    private \DateTime $start;
+    private \DateTime $startDateTime;
 
     #[ORM\Column]
-    private \DateTime $end;
+    private \DateTime $endDateTime;
 
     #[ORM\Column]
-    private bool $isRecurring = false;
-
-    #[ORM\Column(length: 255)]
-    private string $recurringData;
+    private bool $locked = true;
 
     public function getId(): int
     {
@@ -50,14 +50,14 @@ class ICSCalendarEvent
         $this->uid = $uid;
     }
 
-    public function getSummary(): string
+    public function getTitle(): string
     {
-        return $this->summary;
+        return $this->title;
     }
 
-    public function setSummary(string $summary): void
+    public function setTitle(string $title): void
     {
-        $this->summary = $summary;
+        $this->title = $title;
     }
 
     public function getDescription(): string
@@ -70,43 +70,33 @@ class ICSCalendarEvent
         $this->description = $description;
     }
 
-    public function getStart(): \DateTime
+    public function getStartDateTime(): \DateTime
     {
-        return $this->start;
+        return $this->startDateTime;
     }
 
-    public function setStart(\DateTime $start): void
+    public function setStartDateTime(\DateTime $startDateTime): void
     {
-        $this->start = $start;
+        $this->startDateTime = $startDateTime;
     }
 
-    public function getEnd(): \DateTime
+    public function getEndDateTime(): \DateTime
     {
-        return $this->end;
+        return $this->endDateTime;
     }
 
-    public function setEnd(\DateTime $end): void
+    public function setEndDateTime(\DateTime $endDateTime): void
     {
-        $this->end = $end;
+        $this->endDateTime = $endDateTime;
     }
 
-    public function isRecurring(): bool
+    public function isLocked(): bool
     {
-        return $this->isRecurring;
+        return $this->locked;
     }
 
-    public function setIsRecurring(bool $isRecurring): void
+    public function setLocked(bool $locked): void
     {
-        $this->isRecurring = $isRecurring;
-    }
-
-    public function getRecurringData(): string
-    {
-        return $this->recurringData;
-    }
-
-    public function setRecurringData(string $recurringData): void
-    {
-        $this->recurringData = $recurringData;
+        $this->locked = $locked;
     }
 }

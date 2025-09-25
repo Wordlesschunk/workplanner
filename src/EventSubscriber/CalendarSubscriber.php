@@ -46,10 +46,10 @@ class CalendarSubscriber implements EventSubscriberInterface
 
     private function createCalendarEvent(ICSCalendarEvent $source, bool $editableEvent): Event
     {
-        $start = $source->getStart();
-        $end = $source->getEnd();
+        $start = $source->getStartDateTime();
+        $end = $source->getEndDateTime();
 
-        $event = new Event($source->getSummary(), $start, $end);
+        $event = new Event($source->getTitle(), $start, $end);
         $event->addOption('duration', $this->computeDuration($start, $end));
         $event->addOption('editable', $editableEvent);
 
