@@ -4,7 +4,6 @@ namespace App\Command;
 
 use App\Entity\CalendarEvent;
 use App\Entity\ICSCalendarEvent;
-// use App\Entity\Task;
 use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Query\Parameter;
@@ -17,7 +16,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 
 #[AsCommand(
     name: 'app:schedule-tasks',
-    description: 'Schedules tasks into free time over N days with min/max chunking and a unified break.',
+    description: 'Schedules tasks over N days with min/max chunking, a unified break, and re-run conflict resolution.',
 )]
 class ScheduleTasksCommand extends Command
 {
@@ -29,7 +28,6 @@ class ScheduleTasksCommand extends Command
 
     protected function configure(): void
     {
-        // Default is a week; change via --days=N (e.g., 14 for two weeks)
         $this
             ->addOption('days', null, InputOption::VALUE_REQUIRED, 'How many days to schedule (starting today)', 7);
     }
@@ -44,17 +42,15 @@ class ScheduleTasksCommand extends Command
         $WORK_START = '08:00';
         $WORK_END   = '17:00';
 
-        // One unified break used everywhere (after meetings, between any two bookings, and between chunks)
+        // Unified break everywhere (after meetings, between any two bookings, and between chunks)
         $BREAK_SECONDS = 900; // 15 minutes
 
         // Default chunk policy (task can override min/max)
         $DEFAULT_MIN_CHUNK = 1800; // 30 min
         $DEFAULT_MAX_CHUNK = 3600; // 60 min
 
-        // How many days to schedule (starting today)
         $daysToSchedule = max(1, (int) $input->getOption('days'));
 
-        // Today / now (Europe/London), immutable to avoid accidental mutation.
         $today = new \DateTimeImmutable('today');
         $now   = new \DateTimeImmutable('now');
 
@@ -64,10 +60,10 @@ class ScheduleTasksCommand extends Command
                 'id' => 10,
                 'name' => 'Deep Work Block',
                 'priority' => 'high',
-                'required_duration_seconds' => 6 * 3600, // 6h total
+                'required_duration_seconds' => 6 * 3600, // 6h
                 'completed_duration_seconds' => 0,
-                'min_chunk_seconds' => 1800,  // 30m
-                'max_chunk_seconds' => 3600,  // 60m
+                'min_chunk_seconds' => 1800,
+                'max_chunk_seconds' => 3600,
             ],
             [
                 'id' => 11,
@@ -75,8 +71,6 @@ class ScheduleTasksCommand extends Command
                 'priority' => 'normal',
                 'required_duration_seconds' => 12600, // 3.5h
                 'completed_duration_seconds' => 0,
-                'min_chunk_seconds' => 1800,  // 30m
-                'max_chunk_seconds' => 3600,  // 60m
             ],
             [
                 'id' => 12,
@@ -84,8 +78,8 @@ class ScheduleTasksCommand extends Command
                 'priority' => 'high',
                 'required_duration_seconds' => 2700, // 45m
                 'completed_duration_seconds' => 0,
-                'min_chunk_seconds' => 1800, // 30m
-                'max_chunk_seconds' => 3600, // 60m
+                'min_chunk_seconds' => 1800,
+                'max_chunk_seconds' => 3600,
             ],
         ];
 
@@ -93,22 +87,19 @@ class ScheduleTasksCommand extends Command
         [$wsH, $wsM] = array_map('intval', explode(':', $WORK_START));
         [$weH, $weM] = array_map('intval', explode(':', $WORK_END));
 
-        // Track all bookings across the whole range
         $allBookings = [];
 
         for ($d = 0; $d < $daysToSchedule; $d++) {
             $day = $today->modify("+$d day");
 
-            // Workday bounds for this day
             $workDayStart = $day->setTime($wsH, $wsM, 0);
             $workDayEnd   = $day->setTime($weH, $weM, 0);
-
             if ($workDayEnd <= $workDayStart) {
                 $io->warning("Skipping {$day->format('Y-m-d')}: invalid workday window.");
                 continue;
             }
 
-            // Only schedule the remainder of *today*. For future days, use full workday.
+            // Remainder-of-today logic
             $isToday = $day->format('Y-m-d') === $today->format('Y-m-d');
             $windowStart = $workDayStart;
             if ($isToday) {
@@ -122,15 +113,46 @@ class ScheduleTasksCommand extends Command
             }
             $windowEnd = $workDayEnd;
 
-            // Build free slots for this day (clamped to window, unified break added after busy items)
-            $freeTimeSlots = $this->buildFreeSlotsForDay($day, $windowStart, $windowEnd, $BREAK_SECONDS);
+            // 1) ICS busy blocks for the day (clamped to window)
+            $icsBusy = $this->fetchIcsBusyBlocks($day, $windowStart, $windowEnd);
+
+            // 2) Previously auto-scheduled CalendarEvents for the day (in window)
+            $planned = $this->fetchPlannedAutoEvents($windowStart, $windowEnd);
+
+            // 3) Partition planned events into "conflicting" (overlaps ICS) vs "locked" (keep)
+            [$lockedPlanned, $conflictingPlanned] = $this->partitionPlannedAgainstIcs($planned, $icsBusy);
+
+            // 4) Remove conflicting planned events now (they will be rescheduled later today)
+            foreach ($conflictingPlanned as $c) {
+                $this->entityManager->remove($c['entity']);
+            }
+            if (!empty($conflictingPlanned)) {
+                $this->entityManager->flush();
+            }
+
+            // 5) Reduce task remaining by the durations of locked planned events (so we don’t double schedule)
+            $lockedDurByTitle = [];
+            foreach ($lockedPlanned as $lp) {
+                $lockedDurByTitle[$lp['title']] = ($lockedDurByTitle[$lp['title']] ?? 0) + $lp['duration'];
+            }
+            foreach ($tasks as &$t) {
+                $title = (string)($t['name'] ?? '');
+                $lockedDur = $lockedDurByTitle[$title] ?? 0;
+                if ($lockedDur > 0) {
+                    $t['completed_duration_seconds'] = (int) (($t['completed_duration_seconds'] ?? 0) + $lockedDur);
+                }
+            }
+            unset($t);
+
+            // 6) Build free slots from ICS busy + LOCKED planned (we keep them as busy)
+            $freeTimeSlots = $this->buildFreeSlotsFromBusy($windowStart, $windowEnd, array_merge($icsBusy, $this->toBusyBlocks($lockedPlanned)), $BREAK_SECONDS);
 
             if (empty($freeTimeSlots)) {
                 $io->writeln("No free time on {$day->format('Y-m-d')} within window.");
                 continue;
             }
 
-            // Schedule tasks into today's free slots, updating their completed time for carry-over
+            // 7) Schedule remaining chunks into today's free slots
             $result = $this->scheduleTasksWithChunking(
                 $tasks,
                 $freeTimeSlots,
@@ -139,26 +161,48 @@ class ScheduleTasksCommand extends Command
                 $DEFAULT_MAX_CHUNK
             );
 
-            // Persist today's bookings
+            // 8) Persist today’s new bookings
             foreach ($result['bookings'] as $b) {
                 // Skip if identical event exists (idempotency light)
                 if ($this->calendarEventExists($b['name'], \DateTime::createFromImmutable($b['start']), \DateTime::createFromImmutable($b['end']))) {
                     continue;
                 }
-
                 $calendarEvent = new CalendarEvent();
                 $calendarEvent->setStartDateTime(\DateTime::createFromImmutable($b['start']));
                 $calendarEvent->setEndDateTime(\DateTime::createFromImmutable($b['end']));
                 $calendarEvent->setTitle($b['name']);
-                $calendarEvent->setDescription('Auto-scheduled');
-
+                $calendarEvent->setDescription('Auto-scheduled'); // consider storing a task_id here
                 $this->entityManager->persist($calendarEvent);
             }
             $this->entityManager->flush();
 
-            // Log today’s results
+            // 9) Log
+            if (!empty($lockedPlanned)) {
+                $io->section("Kept existing planned bookings for {$day->format('Y-m-d')} (no conflicts)");
+                foreach ($lockedPlanned as $lp) {
+                    $io->writeln(sprintf(
+                        '[keep] %s: %s → %s (%dm)',
+                        $lp['title'],
+                        $lp['start']->format('Y-m-d H:i'),
+                        $lp['end']->format('Y-m-d H:i'),
+                        (int) round($lp['duration'] / 60)
+                    ));
+                }
+            }
+            if (!empty($conflictingPlanned)) {
+                $io->section("Moved conflicting planned bookings on {$day->format('Y-m-d')}");
+                foreach ($conflictingPlanned as $cp) {
+                    $io->writeln(sprintf(
+                        '[moved] %s: %s → %s (%dm)',
+                        $cp['title'],
+                        $cp['start']->format('Y-m-d H:i'),
+                        $cp['end']->format('Y-m-d H:i'),
+                        (int) round($cp['duration'] / 60)
+                    ));
+                }
+            }
             if (!empty($result['bookings'])) {
-                $io->section("Scheduled bookings for {$day->format('Y-m-d')}");
+                $io->section("New bookings for {$day->format('Y-m-d')}");
                 foreach ($result['bookings'] as $b) {
                     $io->writeln(sprintf(
                         '[slot #%d] %s (%s): %s → %s (%dm)',
@@ -171,10 +215,10 @@ class ScheduleTasksCommand extends Command
                     ));
                 }
             } else {
-                $io->writeln("No tasks scheduled on {$day->format('Y-m-d')}.");
+                $io->writeln("No new tasks scheduled on {$day->format('Y-m-d')}.");
             }
 
-            // Carry over: update $tasks’ completed_duration_seconds based on booked durations
+            // 10) Carry-over updates based on *new* bookings (locked ones were already counted)
             $bookedByTask = [];
             foreach ($result['bookings'] as $b) {
                 $bookedByTask[$b['task_id']] = ($bookedByTask[$b['task_id']] ?? 0) + (int) $b['duration'];
@@ -187,82 +231,51 @@ class ScheduleTasksCommand extends Command
             }
             unset($t);
 
-            // Accumulate for final report
             $allBookings = array_merge($allBookings, $result['bookings']);
 
-            // Refresh the tasks list to drop fully completed ones before the next day
+            // Drop completed tasks before the next day
             $tasks = array_values(array_filter($tasks, fn($t) => $this->remainingSeconds($t) > 0));
-
-            // If everything is done early, bail out and ensure we do NOT print stale leftovers
             if (empty($tasks)) {
                 $io->success("All tasks completed by {$day->format('Y-m-d')} — finishing early.");
-                // No stale "Still remaining after range" — just finish.
                 break;
             }
         }
 
         // ---------- Final summary ----------
         if (!empty($allBookings)) {
-            $io->section('Summary: Scheduled across range');
-            $io->writeln(sprintf('Total bookings: %d', count($allBookings)));
+            $io->section('Summary: New bookings created across range');
+            $io->writeln(sprintf('Total new bookings: %d', count($allBookings)));
         } else {
-            $io->warning('No bookings were created in the selected range.');
-        }
-
-        // Recompute true leftovers only now (after loop). If empty, nothing prints.
-        $finalUnscheduled = $this->recomputeUnscheduledSnapshot($tasks);
-        if (!empty($finalUnscheduled)) {
-            $io->section('Still remaining after range');
-            foreach ($finalUnscheduled as $u) {
-                $io->writeln(sprintf(
-                    '- %s: %d min remaining',
-                    (string)($u['name'] ?? 'unnamed'),
-                    (int) round($this->remainingSeconds($u) / 60)
-                ));
-            }
+            $io->writeln('No new bookings were needed.');
         }
 
         $io->success('Done.');
         return Command::SUCCESS;
     }
 
-    // ---------- Helpers ----------
+    // ==================== Busy / Planned helpers ====================
 
-    /**
-     * Build free slots for a specific day within a given window [windowStart, windowEnd],
-     * merging busy items and applying the unified break AFTER each busy block.
-     * (No lunch hold — any lunch should be represented as an ICSCalendarEvent.)
-     */
-    private function buildFreeSlotsForDay(
-        \DateTimeImmutable $day,
-        \DateTimeImmutable $windowStart,
-        \DateTimeImmutable $windowEnd,
-        int $BREAK_SECONDS
-    ): array {
+    /** Return ICS busy blocks for a given day window, clamped and merged. */
+    private function fetchIcsBusyBlocks(\DateTimeImmutable $day, \DateTimeImmutable $windowStart, \DateTimeImmutable $windowEnd): array
+    {
         /** @var ICSCalendarEvent[] $itemsInCalendar */
         $itemsInCalendar = $this->entityManager
             ->getRepository(ICSCalendarEvent::class)
             ->findAllICSEventsInDay($day);
 
-        usort($itemsInCalendar, fn($a, $b) =>
-            $a->getStartDateTime() <=> $b->getStartDateTime()
-        );
+        usort($itemsInCalendar, fn($a, $b) => $a->getStartDateTime() <=> $b->getStartDateTime());
 
         $busy = [];
         foreach ($itemsInCalendar as $e) {
             $s  = \DateTimeImmutable::createFromInterface($e->getStartDateTime());
             $en = \DateTimeImmutable::createFromInterface($e->getEndDateTime());
 
-            if ($en <= $windowStart || $s >= $windowEnd) {
-                continue; // outside window
-            }
+            if ($en <= $windowStart || $s >= $windowEnd) continue;
 
-            // clamp to window
             if ($s < $windowStart) { $s = $windowStart; }
             if ($en > $windowEnd)  { $en = $windowEnd; }
 
-            // merge overlaps
-            if (!empty($busy)) {
+            if ($busy) {
                 $lastKey = array_key_last($busy);
                 $last = $busy[$lastKey];
                 if ($s <= $last['end']) {
@@ -272,36 +285,136 @@ class ScheduleTasksCommand extends Command
             }
             $busy[] = ['start' => $s, 'end' => $en];
         }
+        return $busy;
+    }
 
-        // Build free slots, enforcing the unified break *after* each busy block
-        $freeTimeSlots = [];
+    /**
+     * Fetch prior auto-scheduled CalendarEvents within [windowStart, windowEnd].
+     * We detect them via description starting with 'Auto-scheduled'.
+     */
+    private function fetchPlannedAutoEvents(\DateTimeImmutable $windowStart, \DateTimeImmutable $windowEnd): array
+    {
+        $repo = $this->entityManager->getRepository(CalendarEvent::class);
+
+        $qb = $repo->createQueryBuilder('e')
+            ->where('e.startDateTime < :end')
+            ->andWhere('e.endDateTime > :start')
+            ->andWhere('e.description LIKE :desc')
+            ->setParameters(new ArrayCollection([
+                new Parameter('start', \DateTime::createFromImmutable($windowStart)),
+                new Parameter('end', \DateTime::createFromImmutable($windowEnd)),
+                new Parameter('desc', 'Auto-scheduled%'),
+            ]));
+
+        $events = $qb->getQuery()->getResult();
+
+        $planned = [];
+        foreach ($events as $ev) {
+            /** @var CalendarEvent $ev */
+            $s  = \DateTimeImmutable::createFromInterface($ev->getStartDateTime());
+            $en = \DateTimeImmutable::createFromInterface($ev->getEndDateTime());
+            $planned[] = [
+                'entity'   => $ev,
+                'title'    => (string)$ev->getTitle(),
+                'start'    => $s,
+                'end'      => $en,
+                'duration' => max(0, $en->getTimestamp() - $s->getTimestamp()),
+            ];
+        }
+        return $planned;
+    }
+
+    /** Split planned auto events into [locked, conflicting] against ICS busy blocks (simple overlap rule). */
+    private function partitionPlannedAgainstIcs(array $planned, array $icsBusy): array
+    {
+        $locked = [];
+        $conflicting = [];
+
+        foreach ($planned as $p) {
+            $overlaps = false;
+            foreach ($icsBusy as $blk) {
+                if ($this->intervalsOverlap($p['start'], $p['end'], $blk['start'], $blk['end'])) {
+                    $overlaps = true; break;
+                }
+            }
+            if ($overlaps) {
+                $conflicting[] = $p;
+            } else {
+                $locked[] = $p;
+            }
+        }
+
+        return [$locked, $conflicting];
+    }
+
+    private function intervalsOverlap(\DateTimeImmutable $aStart, \DateTimeImmutable $aEnd, \DateTimeImmutable $bStart, \DateTimeImmutable $bEnd): bool
+    {
+        return ($aStart < $bEnd) && ($aEnd > $bStart);
+    }
+
+    /** Convert planned events to busy-block shape for free-slot building. */
+    private function toBusyBlocks(array $planned): array
+    {
+        $busy = [];
+        foreach ($planned as $p) {
+            $busy[] = ['start' => $p['start'], 'end' => $p['end']];
+        }
+        return $busy;
+    }
+
+    /**
+     * Build free slots over a window given a set of busy blocks. Adds the unified break AFTER each block.
+     * Busy blocks must be merged/non-overlapping ahead of time (ICS already merged; planned usually non-overlapping).
+     */
+    private function buildFreeSlotsFromBusy(
+        \DateTimeImmutable $windowStart,
+        \DateTimeImmutable $windowEnd,
+        array $busyBlocks,
+        int $BREAK_SECONDS
+    ): array {
+        // Merge all busy blocks (ICS + locked planned)
+        usort($busyBlocks, fn($a, $b) => $a['start'] <=> $b['start']);
+        $merged = [];
+        foreach ($busyBlocks as $blk) {
+            if (!$merged) { $merged[] = $blk; continue; }
+            $last =& $merged[array_key_last($merged)];
+            if ($blk['start'] <= $last['end']) {
+                $last['end'] = ($blk['end'] > $last['end']) ? $blk['end'] : $last['end'];
+            } else {
+                $merged[] = $blk;
+            }
+        }
+
+        $free = [];
         $cursor = $windowStart;
 
-        foreach ($busy as $block) {
-            if ($block['start'] > $cursor) {
-                $freeTimeSlots[] = [
+        foreach ($merged as $blk) {
+            if ($blk['start'] > $cursor) {
+                $free[] = [
                     'start' => $cursor,
-                    'end'   => $block['start'],
-                    'duration' => $block['start']->getTimestamp() - $cursor->getTimestamp(),
+                    'end'   => $blk['start'],
+                    'duration' => $blk['start']->getTimestamp() - $cursor->getTimestamp(),
                 ];
             }
-            $afterMeeting = $block['end']->getTimestamp() + $BREAK_SECONDS;
-            $cursor = (new \DateTimeImmutable('@' . $afterMeeting))->setTimezone($block['end']->getTimezone());
+            $after = $blk['end']->getTimestamp() + $BREAK_SECONDS;
+            $cursor = (new \DateTimeImmutable('@' . $after))->setTimezone($blk['end']->getTimezone());
             if ($cursor >= $windowEnd) {
                 break;
             }
         }
 
         if ($cursor < $windowEnd) {
-            $freeTimeSlots[] = [
+            $free[] = [
                 'start' => $cursor,
                 'end'   => $windowEnd,
                 'duration' => $windowEnd->getTimestamp() - $cursor->getTimestamp(),
             ];
         }
 
-        return $freeTimeSlots;
+        return $free;
     }
+
+    // ==================== Core scheduling helpers ====================
 
     private function priorityRank(string $p): int
     {
@@ -337,27 +450,8 @@ class ScheduleTasksCommand extends Command
             ->getQuery()->getSingleScalarResult();
     }
 
-    private function recomputeUnscheduledSnapshot(array $tasks): array
-    {
-        return array_values(array_filter($tasks, fn($t) => $this->remainingSeconds($t) > 0));
-    }
-
     /**
      * Schedule multiple tasks with per-task chunking (min/max) and a unified break between ANY two bookings.
-     *
-     * - Finishes all chunks of task A before moving to task B.
-     * - No padding; only the global $breakSec is enforced:
-     *     • after meetings (handled when building free slots)
-     *     • between any two bookings inside a slot
-     *     • between chunks of the same task
-     * - Final leftover may be < min_chunk_seconds to avoid leaving an unschedulable tail.
-     *
-     * @param array $tasks
-     * @param array $timeslots
-     * @param int   $breakSec           Global break in seconds between bookings/chunks.
-     * @param int   $defaultMinChunk
-     * @param int   $defaultMaxChunk
-     * @return array{bookings: array<int, array>, unscheduled: array<int, array>}
      */
     private function scheduleTasksWithChunking(
         array $tasks,
@@ -391,9 +485,7 @@ class ScheduleTasksCommand extends Command
             $effectiveStartTs = $s->getTimestamp(); // no edge padding
             $effectiveEndTs   = $e->getTimestamp();
 
-            if ($effectiveEndTs <= $effectiveStartTs) {
-                continue; // empty slot
-            }
+            if ($effectiveEndTs <= $effectiveStartTs) continue;
 
             $slots[] = [
                 'index'  => $i,
@@ -411,9 +503,8 @@ class ScheduleTasksCommand extends Command
             foreach ($slots as &$ws) {
                 $startTs = max($ws['cursor'], $notBeforeTs);
                 $available = $ws['endTs'] - $startTs;
-                if ($available < $seconds) {
-                    continue;
-                }
+                if ($available < $seconds) continue;
+
                 $endTs = $startTs + $seconds;
 
                 $tz = $ws['tz'] ?? new \DateTimeZone(date_default_timezone_get());
@@ -443,64 +534,51 @@ class ScheduleTasksCommand extends Command
             $minChunk  = (int)($t['min_chunk_seconds'] ?? $defaultMinChunk);
             $maxChunk  = (int)($t['max_chunk_seconds'] ?? $defaultMaxChunk);
 
-            // Guards
             $minChunk = max(1, $minChunk);
             $maxChunk = max($minChunk, $maxChunk);
 
             $chunksForThisTask = [];
-            $nextEarliestStartTs = 0; // first chunk has no special constraint beyond slot cursor
+            $nextEarliestStartTs = 0;
 
             while ($remaining > 0) {
-                // desired chunk up to maxChunk (but not more than remaining)
                 $desired = min($remaining, $maxChunk);
-
-                // If remaining >= minChunk, ensure chunk >= minChunk. If remaining < minChunk,
-                // permit a "short final" chunk to avoid unschedulable tail.
                 $chunkSize = ($remaining >= $minChunk) ? max($minChunk, $desired) : $remaining;
 
-                // Try place chunk as-is
                 $booking = $placeChunk($slots, $t, $chunkSize, $nextEarliestStartTs);
 
                 if (!$booking) {
-                    // If couldn't place, try step-down sizes (>= minChunk) in 5m decrements
                     $placed = false;
                     if ($remaining >= $minChunk) {
-                        for ($try = min($desired, $maxChunk); $try >= $minChunk; $try -= 300) { // 300s = 5m
+                        for ($try = min($desired, $maxChunk); $try >= $minChunk; $try -= 300) {
                             $booking = $placeChunk($slots, $t, $try, $nextEarliestStartTs);
                             if ($booking) { $placed = true; break; }
                         }
                     }
-                    // If still not placed and remainder < minChunk, try to place the tiny final remainder
                     if (!$placed && $remaining < $minChunk) {
                         $booking = $placeChunk($slots, $t, $remaining, $nextEarliestStartTs);
                         if ($booking) { $placed = true; }
                     }
 
                     if (!$placed) {
-                        // Could not place more chunks today — record remaining
                         $uns = $t;
                         $doneSoFar = array_sum(array_map(fn($b) => $b['duration'], $chunksForThisTask));
                         $uns['completed_duration_seconds'] = ($t['completed_duration_seconds'] ?? 0) + $doneSoFar;
                         $uns['remaining_seconds'] = max(0, $remaining);
                         $unscheduled[] = $uns;
 
-                        // Keep the chunks already placed
                         $bookings = array_merge($bookings, $chunksForThisTask);
-                        continue 2; // next task
+                        continue 2;
                     }
                 }
 
-                // Successfully booked a chunk
                 $chunksForThisTask[] = $booking;
                 $remaining -= $booking['duration'];
 
-                // Enforce the same global break before the next chunk of the same task
                 if ($remaining > 0) {
                     $nextEarliestStartTs = $booking['end']->getTimestamp() + $breakSec;
                 }
             }
 
-            // Task fully scheduled today
             $bookings = array_merge($bookings, $chunksForThisTask);
         }
 
