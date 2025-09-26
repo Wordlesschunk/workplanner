@@ -6,6 +6,7 @@ namespace App\Repository;
 
 use App\Entity\ICSCalendarEvent;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\ORM\AbstractQuery;
 use Doctrine\Persistence\ManagerRegistry;
 
 /**
@@ -30,6 +31,6 @@ class ICSCalendarEventRepository extends ServiceEntityRepository
             ->setParameter('endTime', $endOfDay->setTime(23, 59, 59))
             ->orderBy('e.startDateTime', 'ASC')
             ->getQuery()
-            ->getResult();
+            ->getResult(AbstractQuery::HYDRATE_ARRAY);
     }
 }

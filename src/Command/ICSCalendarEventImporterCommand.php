@@ -92,8 +92,8 @@ class ICSCalendarEventImporterCommand extends Command
                 // Update fields from occurrence
                 $event->setTitle((string) ($occurrence->SUMMARY ?? ''));
                 $event->setDescription((string) ($occurrence->DESCRIPTION ?? ''));
-                $event->setStartDateTime(\DateTime::createFromImmutable($iterator->getDTStart()));
-                $event->setEndDateTime(\DateTime::createFromImmutable($iterator->getDTEnd()));
+                $event->setStartDateTime($iterator->getDTStart());
+                $event->setEndDateTime($iterator->getDTEnd());
 
                 $iterator->next();
             }

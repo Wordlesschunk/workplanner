@@ -32,10 +32,10 @@ class Task
     private int $completedDurationSeconds = 0; // Time spent on task in seconds
 
     #[ORM\Column]
-    private int $eventMinDuration = 0;
+    private int $eventMinDurationSeconds = 0;
 
     #[ORM\Column]
-    private int $eventMaxDuration = 0;
+    private int $eventMaxDurationSeconds = 0;
 
     #[ORM\Column]
     private \DateTime $scheduleAfter;
@@ -98,24 +98,24 @@ class Task
         $this->completedDurationSeconds = $completedDurationSeconds;
     }
 
-    public function getEventMinDuration(): int
+    public function getEventMaxDurationSeconds(): int
     {
-        return $this->eventMinDuration;
+        return $this->eventMaxDurationSeconds;
     }
 
-    public function setEventMinDuration(int $eventMinDuration): void
+    public function setEventMaxDurationSeconds(int $eventMaxDurationSeconds): void
     {
-        $this->eventMinDuration = $eventMinDuration;
+        $this->eventMaxDurationSeconds = $eventMaxDurationSeconds;
     }
 
-    public function getEventMaxDuration(): int
+    public function getEventMinDurationSeconds(): int
     {
-        return $this->eventMaxDuration;
+        return $this->eventMinDurationSeconds;
     }
 
-    public function setEventMaxDuration(int $eventMaxDuration): void
+    public function setEventMinDurationSeconds(int $eventMinDurationSeconds): void
     {
-        $this->eventMaxDuration = $eventMaxDuration;
+        $this->eventMinDurationSeconds = $eventMinDurationSeconds;
     }
 
     public function getScheduleAfter(): \DateTime

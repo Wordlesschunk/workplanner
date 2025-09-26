@@ -38,52 +38,52 @@ class TaskFormType extends AbstractType
                 'label' => 'Time Required',
                 'attr' => ['placeholder' => 'Enter time in minutes'],
                 'choices' => [
-                    '15 mins' => 15,
-                    '30 mins' => 30,
-                    '45 mins' => 45,
-                    '1 hour' => 60,
-                    '1.5 hours' => 90,
-                    '2 hours' => 120,
-                    '3 hours' => 180,
-                    '4 hours' => 240,
-                    '6 hours' => 360,
-                    '8 hours' => 480,
-                    '12 hours' => 720,
-                    '24 hours' => 1440,
+                    '15 mins' => 900,
+                    '30 mins' => 1800,
+                    '45 mins' => 2700,
+                    '1 hour' => 3600,
+                    '1.5 hours' => 5400,
+                    '2 hours' => 7200,
+                    '3 hours' => 10800,
+                    '4 hours' => 14400,
+                    '6 hours' => 21600,
+                    '8 hours' => 28800,
+                    '12 hours' => 43200,
+                    '24 hours' => 86400,
                 ],
             ])
-            ->add('eventMinDuration', ChoiceType::class, [
+            ->add('eventMinDurationSeconds', ChoiceType::class, [
                 'label' => 'Event min duration',
                 'choices' => [
-                    '15 mins' => 15,
-                    '30 mins' => 30,
-                    '45 mins' => 45,
-                    '1 hour' => 60,
-                    '1.5 hours' => 90,
-                    '2 hours' => 120,
-                    '3 hours' => 180,
-                    '4 hours' => 240,
-                    '6 hours' => 360,
-                    '8 hours' => 480,
-                    '12 hours' => 720,
-                    '24 hours' => 1440,
+                    '15 mins' => 900,
+                    '30 mins' => 1800,
+                    '45 mins' => 2700,
+                    '1 hour' => 3600,
+                    '1.5 hours' => 5400,
+                    '2 hours' => 7200,
+                    '3 hours' => 10800,
+                    '4 hours' => 14400,
+                    '6 hours' => 21600,
+                    '8 hours' => 28800,
+                    '12 hours' => 43200,
+                    '24 hours' => 86400,
                 ],
             ])
-            ->add('eventMaxDuration', ChoiceType::class, [
+            ->add('eventMaxDurationSeconds', ChoiceType::class, [
                 'label' => 'Event max duration',
                 'choices' => [
-                    '15 mins' => 15,
-                    '30 mins' => 30,
-                    '45 mins' => 45,
-                    '1 hour' => 60,
-                    '1.5 hours' => 90,
-                    '2 hours' => 120,
-                    '3 hours' => 180,
-                    '4 hours' => 240,
-                    '6 hours' => 360,
-                    '8 hours' => 480,
-                    '12 hours' => 720,
-                    '24 hours' => 1440,
+                    '15 mins' => 900,
+                    '30 mins' => 1800,
+                    '45 mins' => 2700,
+                    '1 hour' => 3600,
+                    '1.5 hours' => 5400,
+                    '2 hours' => 7200,
+                    '3 hours' => 10800,
+                    '4 hours' => 14400,
+                    '6 hours' => 21600,
+                    '8 hours' => 28800,
+                    '12 hours' => 43200,
+                    '24 hours' => 86400,
                 ],
             ])
             ->add('scheduleAfter', DateTimeType::class, [
@@ -97,13 +97,13 @@ class TaskFormType extends AbstractType
 
         $builder->get('requiredDurationSeconds')
             ->addModelTransformer(new CallbackTransformer(
-                // model → view (seconds → minutes)
-                function ($secondsToMinutes) {
-                    return $secondsToMinutes ? $secondsToMinutes / 60 : '';
+            // model → view (seconds → seconds)
+                function ($seconds) {
+                    return $seconds ?: '';
                 },
-                // view → model (minutes → seconds)
-                function ($minutesToSeconds) {
-                    return null !== $minutesToSeconds ? $minutesToSeconds * 60 : null;
+                // view → model (seconds → seconds) 
+                function ($seconds) {
+                    return null !== $seconds ? $seconds : null;
                 }
             ));
     }
