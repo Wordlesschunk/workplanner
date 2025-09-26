@@ -20,7 +20,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 )]
 class SchedulerCommand extends Command
 {
-    private const BUFFER_SECONDS = 900; // 15 minutes between tasks and around meetings
+    private const BUFFER_SECONDS = 900; // 15 minutes buffer between tasks and around meetings
 
     public function __construct(
         private readonly TaskRepository $taskRepo,
@@ -33,6 +33,7 @@ class SchedulerCommand extends Command
 
     protected function configure(): void
     {
+        // CLI option: how many days ahead to schedule
         $this
             ->addOption(
                 'days',
@@ -52,15 +53,17 @@ class SchedulerCommand extends Command
         $output->writeln("<info>Starting scheduler (horizon = {$days} days)…</info>");
 
         /**
-         * Step 0: Freeze past unlocked events & clear future unlocked events.
+         * STEP 0: Clean up existing unlocked events
+         * - Past events → lock and credit time back to the task (progress tracking)
+         * - Future events → remove (so we can reschedule fresh).
          */
         $unlockedEvents = $this->calendarEventRepo->findBy(['locked' => false]);
         foreach ($unlockedEvents as $event) {
             if ($event->getEndDateTime() < $now) {
-                // Past events → lock
+                // Freeze past events by locking them
                 $event->setLocked(true);
 
-                // If it's a task event, update completedDurationSeconds
+                // Credit progress to the task if linked
                 if ($event->getTask() instanceof Task) {
                     $task = $event->getTask();
                     $duration = $event->getEndDateTime()->getTimestamp() - $event->getStartDateTime()->getTimestamp();
@@ -70,14 +73,14 @@ class SchedulerCommand extends Command
                     $this->em->persist($task);
                 }
             } else {
-                // Future events → remove
+                // Delete future unlocked task events → they will be rebuilt
                 $this->em->remove($event);
             }
         }
         $this->em->flush();
 
         /**
-         * Step 1: Gather tasks.
+         * STEP 1: Gather tasks that still need work.
          */
         $tasksAll = $this->taskRepo->findAll();
         $tasks = array_values(array_filter(
@@ -94,7 +97,10 @@ class SchedulerCommand extends Command
         $hEnd = $horizonEnd;
 
         /**
-         * Step 2: Collect busy intervals (ICS + locked CalendarEvents) with buffer applied.
+         * STEP 2: Build a "busy" list from:
+         * - Locked calendar events
+         * - ICS events (meetings)
+         * Add buffer around them so we don’t drop tasks right before/after meetings.
          */
         $busy = [];
         $buffer = new \DateInterval('PT'.self::BUFFER_SECONDS.'S');
@@ -111,7 +117,7 @@ class SchedulerCommand extends Command
             $busy[] = ['start' => $start, 'end' => $end];
         }
 
-        // Normalize busy intervals within horizon
+        // Normalize busy intervals so they only affect time inside the scheduling horizon
         $busy = array_values(array_filter(array_map(function ($i) use ($hStart, $hEnd) {
             $s = max($i['start'], $hStart);
             $e = min($i['end'], $hEnd);
@@ -120,13 +126,17 @@ class SchedulerCommand extends Command
         }, $busy)));
 
         /*
-         * Step 3: Build free slots (Mon–Fri, 08:00–17:00) within horizon
+         * STEP 3: Build free slots (Mon–Fri, 08:00–17:00)
+         * These are the windows where we can place tasks.
          */
         [$workStartHour, $workEndHour] = [8, 17];
         $freeSlots = $this->buildFreeSlots($hStart, $hEnd, $busy, $workStartHour, $workEndHour);
 
         /*
-         * Step 4: Smarter prioritisation (priority + hour-level urgency)
+         * STEP 4: Prioritise tasks
+         * - Base priority weight: HIGH > MEDIUM > LOW
+         * - Add "urgency" score based on HOURS until due
+         *   → ensures tasks due soon (even MEDIUM) are scheduled ahead of far-off HIGH tasks
          */
         usort($tasks, function ($a, $b) use ($now) {
             $priorityBase = ['HIGH' => 200, 'MEDIUM' => 120, 'LOW' => 40];
@@ -134,20 +144,24 @@ class SchedulerCommand extends Command
             $hoursUntilA = max(0, (int) ceil(($a->getDueDate()->getTimestamp() - $now->getTimestamp()) / 3600));
             $hoursUntilB = max(0, (int) ceil(($b->getDueDate()->getTimestamp() - $now->getTimestamp()) / 3600));
 
-            $urgencyWindowHours = 168; // 7 days
+            $urgencyWindowHours = 168; // 7 days (tuneable)
             $urgencyA = max(0, $urgencyWindowHours - $hoursUntilA);
             $urgencyB = max(0, $urgencyWindowHours - $hoursUntilB);
 
             $scoreA = ($priorityBase[$a->getPriority()] ?? 0) + ($urgencyA * 10);
             $scoreB = ($priorityBase[$b->getPriority()] ?? 0) + ($urgencyB * 10);
 
+            // Sort by score desc, then by earlier due date, then by higher priority
             return ($scoreB <=> $scoreA)
                 ?: ($a->getDueDate() <=> $b->getDueDate())
                     ?: (($priorityBase[$b->getPriority()] ?? 0) <=> ($priorityBase[$a->getPriority()] ?? 0));
         });
 
         /*
-         * Step 5: Schedule each task into blocks
+         * STEP 5: Try to schedule tasks into available slots
+         * - Split into chunks respecting min/max duration
+         * - Stop at horizon cutoff
+         * - Insert buffer between allocations
          */
         foreach ($tasks as $task) {
             $remaining = $task->getRequiredDurationSeconds() - $task->getCompletedDurationSeconds();
@@ -155,15 +169,15 @@ class SchedulerCommand extends Command
                 continue;
             }
 
-            $minChunk = max(300, (int) $task->getEventMinDurationSeconds()); // fallback 5 min
+            $minChunk = max(300, (int) $task->getEventMinDurationSeconds()); // fallback = 5 min
             $maxChunk = (int) $task->getEventMaxDurationSeconds();
             if ($maxChunk <= 0) {
                 $maxChunk = 3600;
-            } // fallback 60 min
+            } // fallback = 60 min
 
             $scheduleAfter = \DateTimeImmutable::createFromMutable($task->getScheduleAfter());
 
-            // If scheduleAfter is outside horizon, skip
+            // Skip if task starts beyond horizon
             if ($scheduleAfter > $hEnd) {
                 $output->writeln(sprintf(
                     '<comment>→ Task #%d "%s" starts after horizon, skipping.</comment>',
@@ -186,7 +200,7 @@ class SchedulerCommand extends Command
             while ($remaining > 0 && $i < count($freeSlots)) {
                 $slot = $freeSlots[$i];
                 $availStart = max($slot['start'], $scheduleAfter);
-                $availEnd = min($slot['end'], $hEnd); // hard cutoff at horizon
+                $availEnd = min($slot['end'], $hEnd); // enforce horizon
 
                 if ($availEnd <= $availStart) {
                     ++$i;
@@ -200,7 +214,7 @@ class SchedulerCommand extends Command
                     continue;
                 }
 
-                // Decide block size
+                // Choose block size within [minChunk, maxChunk]
                 if ($remaining < $minChunk) {
                     $blockSecs = min($minChunk, $availSecs);
                 } else {
@@ -212,25 +226,26 @@ class SchedulerCommand extends Command
                     continue;
                 }
 
-                // Create event
+                // Create calendar event for this task block
                 $ev = new CalendarEvent();
                 $ev->setTitle('[Task] '.$task->getName());
                 $ev->setDescription($task->getNotes() ?? '');
                 $ev->setStartDateTime(\DateTime::createFromImmutable($availStart));
                 $ev->setEndDateTime(\DateTime::createFromImmutable($availStart->modify("+{$blockSecs} seconds")));
                 $ev->setLocked(false);
-                $ev->setTask($task);
+                $ev->setTask($task); // link to task in DB
 
                 $this->em->persist($ev);
 
                 $remaining -= $blockSecs;
 
-                // Split slot with buffer
+                // Split the slot with buffer applied
                 $allocStart = $availStart;
                 $allocEnd = $availStart->modify("+{$blockSecs} seconds");
                 $i = $this->splitSlot($freeSlots, $i, $allocStart, $allocEnd);
             }
 
+            // If task not fully scheduled within horizon → warn
             if ($remaining > 0) {
                 $mins = (int) ceil($remaining / 60);
                 $output->writeln(sprintf(
@@ -242,12 +257,16 @@ class SchedulerCommand extends Command
             }
         }
 
+        // Persist all changes
         $this->em->flush();
         $output->writeln('<info>Done.</info>');
 
         return Command::SUCCESS;
     }
 
+    /**
+     * Build free slots by removing busy intervals from working hours.
+     */
     private function buildFreeSlots(
         \DateTimeImmutable $hStart,
         \DateTimeImmutable $hEnd,
@@ -261,7 +280,7 @@ class SchedulerCommand extends Command
         $cursor = (new \DateTimeImmutable($hStart->format('Y-m-d 00:00:00')));
         while ($cursor < $hEnd) {
             $dow = (int) $cursor->format('N'); // 1=Mon .. 7=Sun
-            if ($dow >= 1 && $dow <= 5) {
+            if ($dow >= 1 && $dow <= 5) { // weekdays only
                 $dayStart = $cursor->setTime($workStartHour, 0, 0);
                 $dayEnd = $cursor->setTime($workEndHour, 0, 0);
 
@@ -269,6 +288,7 @@ class SchedulerCommand extends Command
                 $windowEnd = min($dayEnd, $hEnd);
 
                 if ($windowEnd > $windowStart) {
+                    // Collect busy periods for this day
                     $dayBusy = [];
                     foreach ($busy as $b) {
                         if ($b['end'] <= $windowStart || $b['start'] >= $windowEnd) {
@@ -281,6 +301,7 @@ class SchedulerCommand extends Command
                     }
                     $dayBusy = $this->mergeIntervals($dayBusy);
 
+                    // Fill gaps as free slots
                     $cursor2 = $windowStart;
                     foreach ($dayBusy as $b) {
                         if ($cursor2 < $b['start']) {
@@ -299,6 +320,9 @@ class SchedulerCommand extends Command
         return $slots;
     }
 
+    /**
+     * Merge overlapping intervals into a clean busy list.
+     */
     private function mergeIntervals(array $intervals): array
     {
         if (!$intervals) {
@@ -311,6 +335,7 @@ class SchedulerCommand extends Command
             $last = &$merged[count($merged) - 1];
             $cur = $intervals[$i];
             if ($cur['start'] <= $last['end']) {
+                // overlap → extend
                 if ($cur['end'] > $last['end']) {
                     $last['end'] = $cur['end'];
                 }
@@ -322,6 +347,11 @@ class SchedulerCommand extends Command
         return $merged;
     }
 
+    /**
+     * Split a free slot after allocating a block
+     * - Left side remains
+     * - Right side starts after block + buffer.
+     */
     private function splitSlot(array &$slots, int $idx, \DateTimeImmutable $allocStart, \DateTimeImmutable $allocEnd): int
     {
         $slot = $slots[$idx];
