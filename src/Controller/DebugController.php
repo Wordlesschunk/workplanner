@@ -24,15 +24,26 @@ final class DebugController extends AbstractController
     {
 
 
+
+
+
+
+
+
+
         return $this->render('debug/index.html.twig');
     }
 
     #[Route('/debug/item', name: 'app_item')]
     public function item(TaskRepository $taskRepository): Response
     {
+
+//        $task = $taskRepository->findAllToArray();
+//        dd($this->json($task)->getContent());
+
         $date = new \DateTimeImmutable('now');
-        $startOfWeek = $date->modify('monday this week')->setTime(0, 0, 0);
-        $endOfWeek = $date->modify('sunday this week')->setTime(23, 59, 59);
+        $startOfWeek = $date->modify('monday next week')->setTime(0, 0, 0);
+        $endOfWeek = $date->modify('sunday next week')->setTime(23, 59, 59);
 
         // Query CalendarEvent
         $calendarEvents = $this->entityManager->createQueryBuilder()
@@ -65,7 +76,7 @@ final class DebugController extends AbstractController
         usort($allEvents, fn ($a, $b) => $a['startDateTime'] <=> $b['startDateTime']
         );
 
-        dd($this->json($allEvents));
+        dd($this->json($allEvents)->getContent());
 
         $calendarItemsToday = $ICSCalendarEventRepository->findAllICSEventsInDay(new \DateTimeImmutable('now'));
 

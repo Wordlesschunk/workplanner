@@ -94,13 +94,20 @@ class SchedulerCommand extends Command
         [$workStartHour, $workEndHour] = [8, 17];
         $freeSlots = $this->buildFreeSlots($hStart, $hEnd, $busy, $workStartHour, $workEndHour);
 
-        // 3) Sort tasks by priority (HIGH > MEDIUM > LOW), then by due date
-        $prioOrder = ['HIGH' => 1, 'MEDIUM' => 2, 'LOW' => 3];
-        usort($tasks, function ($a, $b) use ($prioOrder) {
-            $pa = $prioOrder[$a->getPriority()] ?? 99;
-            $pb = $prioOrder[$b->getPriority()] ?? 99;
+        // 3) Sort tasks by smarter prioritisation (priority + urgency)
+        usort($tasks, function ($a, $b) use ($now) {
+            $priorityWeights = ['HIGH' => 100, 'MEDIUM' => 50, 'LOW' => 10];
 
-            return $pa <=> $pb ?: ($a->getDueDate() <=> $b->getDueDate());
+            $daysA = max(0, $now->diff($a->getDueDate())->days);
+            $daysB = max(0, $now->diff($b->getDueDate())->days);
+
+            // 30 is the urgency window (30days)
+            $scoreA = ($priorityWeights[$a->getPriority()] ?? 0)
+                + max(0, 30 - $daysA);
+            $scoreB = ($priorityWeights[$b->getPriority()] ?? 0)
+                + max(0, 30 - $daysB);
+
+            return $scoreB <=> $scoreA; // higher score first
         });
 
         // 4) Schedule each task into blocks
