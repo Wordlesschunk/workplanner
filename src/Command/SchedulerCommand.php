@@ -44,27 +44,24 @@ class SchedulerCommand extends Command
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-
         $days = (int)$input->getOption('days');
         $now = new \DateTimeImmutable('now');
         $horizonEnd = $now->modify("+{$days} days");
 
-        $output->writeln("<info>Starting scheduler (horizon = {$days} days)…</info>");
+        $output->writeln("<info>Starting scheduler (initial horizon = {$days} days)…</info>");
 
-        // 0) Gather tasks within horizon
+        // 0) Gather tasks
         $tasksAll = $this->taskRepo->findAll();
         $tasks = array_values(array_filter(
             $tasksAll,
-            fn($t) =>
-                $t->getCompletedDurationSeconds() < $t->getRequiredDurationSeconds()
-                && \DateTimeImmutable::createFromMutable($t->getScheduleAfter()) <= $horizonEnd
+            fn($t) => $t->getCompletedDurationSeconds() < $t->getRequiredDurationSeconds()
         ));
         if (!$tasks) {
-            $output->writeln('<comment>No tasks with remaining work in horizon. Nothing to schedule.</comment>');
+            $output->writeln('<comment>No tasks with remaining work. Nothing to schedule.</comment>');
             return Command::SUCCESS;
         }
 
-        // Horizon start is now, horizon end is fixed
+        // Horizon start is now; end is initial horizon (but tasks can extend beyond it)
         $hStart = $now;
         $hEnd = $horizonEnd;
 
@@ -82,13 +79,15 @@ class SchedulerCommand extends Command
                 'end'   => \DateTimeImmutable::createFromMutable($e->getEndDateTime()),
             ];
         }
+
+        // normalize within initial horizon
         $busy = array_values(array_filter(array_map(function ($i) use ($hStart, $hEnd) {
             $s = max($i['start'], $hStart);
             $e = min($i['end'],   $hEnd);
             return $e > $s ? ['start' => $s, 'end' => $e] : null;
         }, $busy)));
 
-        // 2) Build multi-day free slots (Mon–Fri, 09:00–17:00)
+        // 2) Build free slots (Mon–Fri, 09:00–17:00). If tasks spill over horizon, we'll extend later.
         [$workStartHour, $workEndHour] = [9, 17];
         $freeSlots = $this->buildFreeSlots($hStart, $hEnd, $busy, $workStartHour, $workEndHour);
 
@@ -110,27 +109,31 @@ class SchedulerCommand extends Command
             if ($maxChunk <= 0) { $maxChunk = 3600; } // fallback 60 min
 
             $scheduleAfter = \DateTimeImmutable::createFromMutable($task->getScheduleAfter());
-            $dueDate       = \DateTimeImmutable::createFromMutable($task->getDueDate());
-            $dueDate       = min($dueDate, $horizonEnd); // cap at horizon end
 
             $output->writeln(sprintf(
-                '→ Task #%d "%s": need %d min (chunks %d–%d min), window %s → %s',
+                '→ Task #%d "%s": need %d min (chunks %d–%d min)',
                 $task->getId(),
                 $task->getName(),
                 (int)ceil($remaining/60),
                 (int)ceil($minChunk/60),
                 (int)ceil($maxChunk/60),
-                $scheduleAfter->format('Y-m-d H:i'),
-                $dueDate->format('Y-m-d H:i'),
             ));
 
             $i = 0;
-            while ($remaining > 0 && $i < count($freeSlots)) {
-                $slot = $freeSlots[$i];
+            while ($remaining > 0) {
+                if ($i >= count($freeSlots)) {
+                    // No free slots left → extend horizon by 1 day and regenerate
+                    $hEnd = $hEnd->modify('+1 day');
+                    $freeSlots = array_merge(
+                        $freeSlots,
+                        $this->buildFreeSlots($hEnd->setTime(0,0), $hEnd, [], $workStartHour, $workEndHour)
+                    );
+                    continue;
+                }
 
-                // Intersect slot with [scheduleAfter, dueDate]
+                $slot = $freeSlots[$i];
                 $availStart = max($slot['start'], $scheduleAfter);
-                $availEnd   = min($slot['end'],   $dueDate);
+                $availEnd   = $slot['end'];
 
                 if ($availEnd <= $availStart) {
                     $i++;
@@ -139,8 +142,6 @@ class SchedulerCommand extends Command
 
                 $availSecs = $availEnd->getTimestamp() - $availStart->getTimestamp();
 
-                // If the available slot is too small for the minChunk,
-                // but we still need more than minChunk → skip
                 if ($availSecs < $minChunk && $remaining > $minChunk) {
                     $i++;
                     continue;
@@ -148,7 +149,6 @@ class SchedulerCommand extends Command
 
                 // Decide block size
                 if ($remaining < $minChunk) {
-                    // Force final block at minChunk if it fits
                     $blockSecs = min($minChunk, $availSecs);
                 } else {
                     $blockSecs = min($maxChunk, $remaining, $availSecs);
@@ -172,15 +172,7 @@ class SchedulerCommand extends Command
                 $i = $this->splitSlot($freeSlots, $i, $allocStart, $allocEnd);
             }
 
-            if ($remaining > 0) {
-                $mins = (int)ceil($remaining / 60);
-                $output->writeln(sprintf(
-                    '<comment>   Could not schedule %d min before due date for task #%d "%s".</comment>',
-                    $mins, $task->getId(), $task->getName()
-                ));
-            } else {
-                $output->writeln('   Scheduled fully ✅');
-            }
+            $output->writeln('   Scheduled fully ✅');
         }
 
         $this->em->flush();
@@ -207,7 +199,7 @@ class SchedulerCommand extends Command
                 $dayEnd   = $cursor->setTime($workEndHour, 0, 0);
 
                 $windowStart = max($dayStart, $hStart);
-                $windowEnd   = min($dayEnd,   $hEnd);
+                $windowEnd   = $dayEnd;
 
                 if ($windowEnd > $windowStart) {
                     $dayBusy = [];
