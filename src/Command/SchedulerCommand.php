@@ -9,6 +9,7 @@ use App\Repository\ICSCalendarEventRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
@@ -29,28 +30,43 @@ class SchedulerCommand extends Command
         parent::__construct();
     }
 
+    protected function configure(): void
+    {
+        $this
+            ->addOption(
+                'days',
+                '',
+                InputArgument::OPTIONAL,
+                'Number of days into the future to schedule (default 7)',
+                7
+            );
+    }
+
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $output->writeln('<info>Starting scheduler…</info>');
 
-        // 0) Gather horizon (earliest scheduleAfter -> latest dueDate)
+        $days = (int)$input->getOption('days');
+        $now = new \DateTimeImmutable('now');
+        $horizonEnd = $now->modify("+{$days} days");
+
+        $output->writeln("<info>Starting scheduler (horizon = {$days} days)…</info>");
+
+        // 0) Gather tasks within horizon
         $tasksAll = $this->taskRepo->findAll();
         $tasks = array_values(array_filter(
             $tasksAll,
-            fn($t) => $t->getCompletedDurationSeconds() < $t->getRequiredDurationSeconds()
+            fn($t) =>
+                $t->getCompletedDurationSeconds() < $t->getRequiredDurationSeconds()
+                && \DateTimeImmutable::createFromMutable($t->getScheduleAfter()) <= $horizonEnd
         ));
         if (!$tasks) {
-            $output->writeln('<comment>No tasks with remaining work. Nothing to schedule.</comment>');
+            $output->writeln('<comment>No tasks with remaining work in horizon. Nothing to schedule.</comment>');
             return Command::SUCCESS;
         }
 
-        $hStart = null; $hEnd = null;
-        foreach ($tasks as $t) {
-            $sa = \DateTimeImmutable::createFromMutable($t->getScheduleAfter());
-            $dd = \DateTimeImmutable::createFromMutable($t->getDueDate());
-            $hStart = $hStart ? min($hStart, $sa) : $sa;
-            $hEnd   = $hEnd   ? max($hEnd,   $dd) : $dd;
-        }
+        // Horizon start is now, horizon end is fixed
+        $hStart = $now;
+        $hEnd = $horizonEnd;
 
         // 1) Collect busy intervals (ICS + locked CalendarEvents)
         $busy = [];
@@ -95,6 +111,7 @@ class SchedulerCommand extends Command
 
             $scheduleAfter = \DateTimeImmutable::createFromMutable($task->getScheduleAfter());
             $dueDate       = \DateTimeImmutable::createFromMutable($task->getDueDate());
+            $dueDate       = min($dueDate, $horizonEnd); // cap at horizon end
 
             $output->writeln(sprintf(
                 '→ Task #%d "%s": need %d min (chunks %d–%d min), window %s → %s',
