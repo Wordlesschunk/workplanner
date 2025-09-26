@@ -48,7 +48,7 @@ class SchedulerCommand extends Command
         $now = new \DateTimeImmutable('now');
         $horizonEnd = $now->modify("+{$days} days");
 
-        $output->writeln("<info>Starting scheduler (initial horizon = {$days} days)…</info>");
+        $output->writeln("<info>Starting scheduler (horizon = {$days} days)…</info>");
 
         // 0) Gather tasks
         $tasksAll = $this->taskRepo->findAll();
@@ -61,7 +61,7 @@ class SchedulerCommand extends Command
             return Command::SUCCESS;
         }
 
-        // Horizon start is now; end is initial horizon (but tasks can extend beyond it)
+        // Horizon start and end
         $hStart = $now;
         $hEnd = $horizonEnd;
 
@@ -80,15 +80,15 @@ class SchedulerCommand extends Command
             ];
         }
 
-        // normalize within initial horizon
+        // normalize busy intervals within horizon
         $busy = array_values(array_filter(array_map(function ($i) use ($hStart, $hEnd) {
             $s = max($i['start'], $hStart);
             $e = min($i['end'],   $hEnd);
             return $e > $s ? ['start' => $s, 'end' => $e] : null;
         }, $busy)));
 
-        // 2) Build free slots (Mon–Fri, 09:00–17:00). If tasks spill over horizon, we'll extend later.
-        [$workStartHour, $workEndHour] = [9, 17];
+        // 2) Build free slots (Mon–Fri, 09:00–17:00) within horizon
+        [$workStartHour, $workEndHour] = [8, 17];
         $freeSlots = $this->buildFreeSlots($hStart, $hEnd, $busy, $workStartHour, $workEndHour);
 
         // 3) Sort tasks by priority (HIGH > MEDIUM > LOW), then by due date
@@ -110,6 +110,16 @@ class SchedulerCommand extends Command
 
             $scheduleAfter = \DateTimeImmutable::createFromMutable($task->getScheduleAfter());
 
+            // If scheduleAfter is outside horizon, skip
+            if ($scheduleAfter > $hEnd) {
+                $output->writeln(sprintf(
+                    '<comment>→ Task #%d "%s" starts after horizon, skipping.</comment>',
+                    $task->getId(),
+                    $task->getName()
+                ));
+                continue;
+            }
+
             $output->writeln(sprintf(
                 '→ Task #%d "%s": need %d min (chunks %d–%d min)',
                 $task->getId(),
@@ -120,20 +130,10 @@ class SchedulerCommand extends Command
             ));
 
             $i = 0;
-            while ($remaining > 0) {
-                if ($i >= count($freeSlots)) {
-                    // No free slots left → extend horizon by 1 day and regenerate
-                    $hEnd = $hEnd->modify('+1 day');
-                    $freeSlots = array_merge(
-                        $freeSlots,
-                        $this->buildFreeSlots($hEnd->setTime(0,0), $hEnd, [], $workStartHour, $workEndHour)
-                    );
-                    continue;
-                }
-
+            while ($remaining > 0 && $i < count($freeSlots)) {
                 $slot = $freeSlots[$i];
                 $availStart = max($slot['start'], $scheduleAfter);
-                $availEnd   = $slot['end'];
+                $availEnd   = min($slot['end'], $hEnd); // hard cutoff at horizon
 
                 if ($availEnd <= $availStart) {
                     $i++;
@@ -154,6 +154,11 @@ class SchedulerCommand extends Command
                     $blockSecs = min($maxChunk, $remaining, $availSecs);
                 }
 
+                if ($blockSecs <= 0) {
+                    $i++;
+                    continue;
+                }
+
                 // Create event
                 $ev = new CalendarEvent();
                 $ev->setTitle('[Task] ' . $task->getName());
@@ -172,7 +177,15 @@ class SchedulerCommand extends Command
                 $i = $this->splitSlot($freeSlots, $i, $allocStart, $allocEnd);
             }
 
-            $output->writeln('   Scheduled fully ✅');
+            if ($remaining > 0) {
+                $mins = (int)ceil($remaining / 60);
+                $output->writeln(sprintf(
+                    '<comment>   Could not schedule %d min within horizon for task #%d "%s".</comment>',
+                    $mins, $task->getId(), $task->getName()
+                ));
+            } else {
+                $output->writeln('   Scheduled fully ✅');
+            }
         }
 
         $this->em->flush();
@@ -199,7 +212,7 @@ class SchedulerCommand extends Command
                 $dayEnd   = $cursor->setTime($workEndHour, 0, 0);
 
                 $windowStart = max($dayStart, $hStart);
-                $windowEnd   = $dayEnd;
+                $windowEnd   = min($dayEnd, $hEnd);
 
                 if ($windowEnd > $windowStart) {
                     $dayBusy = [];
