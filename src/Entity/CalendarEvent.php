@@ -32,6 +32,20 @@ class CalendarEvent implements CalendarEventInterface
     #[ORM\Column]
     private bool $locked = false;
 
+    #[ORM\ManyToOne(targetEntity: Task::class)]
+    #[ORM\JoinColumn(name: "task_id", referencedColumnName: "id", nullable: true, onDelete: "SET NULL")]
+    private ?Task $task = null;
+
+    public function getTask(): ?Task
+    {
+        return $this->task;
+    }
+
+    public function setTask(?Task $task): void
+    {
+        $this->task = $task;
+    }
+
     public function getId(): int
     {
         return $this->id;

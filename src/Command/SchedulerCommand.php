@@ -3,6 +3,7 @@
 namespace App\Command;
 
 use App\Entity\CalendarEvent;
+use App\Entity\Task;
 use App\Repository\CalendarEventRepository;
 use App\Repository\ICSCalendarEventRepository;
 use App\Repository\TaskRepository;
@@ -50,7 +51,34 @@ class SchedulerCommand extends Command
 
         $output->writeln("<info>Starting scheduler (horizon = {$days} days)…</info>");
 
-        // 0) Gather tasks
+        /**
+         * Step 0: Freeze past unlocked events & clear future unlocked events.
+         */
+        $unlockedEvents = $this->calendarEventRepo->findBy(['locked' => false]);
+        foreach ($unlockedEvents as $event) {
+            if ($event->getEndDateTime() < $now) {
+                // Past events → lock
+                $event->setLocked(true);
+
+                // If it's a task event, update completedDurationSeconds
+                if ($event->getTask() instanceof Task) {
+                    $task = $event->getTask();
+                    $duration = $event->getEndDateTime()->getTimestamp() - $event->getStartDateTime()->getTimestamp();
+                    $task->setCompletedDurationSeconds(
+                        $task->getCompletedDurationSeconds() + $duration
+                    );
+                    $this->em->persist($task);
+                }
+            } else {
+                // Future events → remove
+                $this->em->remove($event);
+            }
+        }
+        $this->em->flush();
+
+        /**
+         * Step 1: Gather tasks.
+         */
         $tasksAll = $this->taskRepo->findAll();
         $tasks = array_values(array_filter(
             $tasksAll,
@@ -62,11 +90,12 @@ class SchedulerCommand extends Command
             return Command::SUCCESS;
         }
 
-        // Horizon start and end
         $hStart = $now;
         $hEnd = $horizonEnd;
 
-        // 1) Collect busy intervals (ICS + locked CalendarEvents) with buffer applied
+        /**
+         * Step 2: Collect busy intervals (ICS + locked CalendarEvents) with buffer applied.
+         */
         $busy = [];
         $buffer = new \DateInterval('PT'.self::BUFFER_SECONDS.'S');
 
@@ -82,7 +111,7 @@ class SchedulerCommand extends Command
             $busy[] = ['start' => $start, 'end' => $end];
         }
 
-        // normalize busy intervals within horizon
+        // Normalize busy intervals within horizon
         $busy = array_values(array_filter(array_map(function ($i) use ($hStart, $hEnd) {
             $s = max($i['start'], $hStart);
             $e = min($i['end'], $hEnd);
@@ -90,27 +119,36 @@ class SchedulerCommand extends Command
             return $e > $s ? ['start' => $s, 'end' => $e] : null;
         }, $busy)));
 
-        // 2) Build free slots (Mon–Fri, 08:00–17:00) within horizon
+        /*
+         * Step 3: Build free slots (Mon–Fri, 08:00–17:00) within horizon
+         */
         [$workStartHour, $workEndHour] = [8, 17];
         $freeSlots = $this->buildFreeSlots($hStart, $hEnd, $busy, $workStartHour, $workEndHour);
 
-        // 3) Sort tasks by smarter prioritisation (priority + urgency)
+        /*
+         * Step 4: Smarter prioritisation (priority + hour-level urgency)
+         */
         usort($tasks, function ($a, $b) use ($now) {
-            $priorityWeights = ['HIGH' => 100, 'MEDIUM' => 50, 'LOW' => 10];
+            $priorityBase = ['HIGH' => 200, 'MEDIUM' => 120, 'LOW' => 40];
 
-            $daysA = max(0, $now->diff($a->getDueDate())->days);
-            $daysB = max(0, $now->diff($b->getDueDate())->days);
+            $hoursUntilA = max(0, (int) ceil(($a->getDueDate()->getTimestamp() - $now->getTimestamp()) / 3600));
+            $hoursUntilB = max(0, (int) ceil(($b->getDueDate()->getTimestamp() - $now->getTimestamp()) / 3600));
 
-            // 30 is the urgency window (30days)
-            $scoreA = ($priorityWeights[$a->getPriority()] ?? 0)
-                + max(0, 30 - $daysA);
-            $scoreB = ($priorityWeights[$b->getPriority()] ?? 0)
-                + max(0, 30 - $daysB);
+            $urgencyWindowHours = 168; // 7 days
+            $urgencyA = max(0, $urgencyWindowHours - $hoursUntilA);
+            $urgencyB = max(0, $urgencyWindowHours - $hoursUntilB);
 
-            return $scoreB <=> $scoreA; // higher score first
+            $scoreA = ($priorityBase[$a->getPriority()] ?? 0) + ($urgencyA * 10);
+            $scoreB = ($priorityBase[$b->getPriority()] ?? 0) + ($urgencyB * 10);
+
+            return ($scoreB <=> $scoreA)
+                ?: ($a->getDueDate() <=> $b->getDueDate())
+                    ?: (($priorityBase[$b->getPriority()] ?? 0) <=> ($priorityBase[$a->getPriority()] ?? 0));
         });
 
-        // 4) Schedule each task into blocks
+        /*
+         * Step 5: Schedule each task into blocks
+         */
         foreach ($tasks as $task) {
             $remaining = $task->getRequiredDurationSeconds() - $task->getCompletedDurationSeconds();
             if ($remaining <= 0) {
@@ -181,6 +219,7 @@ class SchedulerCommand extends Command
                 $ev->setStartDateTime(\DateTime::createFromImmutable($availStart));
                 $ev->setEndDateTime(\DateTime::createFromImmutable($availStart->modify("+{$blockSecs} seconds")));
                 $ev->setLocked(false);
+                $ev->setTask($task);
 
                 $this->em->persist($ev);
 
